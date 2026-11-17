@@ -25,6 +25,9 @@ LIBTINFO5_SHA256=d2597b5aec92a930cf549e1b429ad892595813e72ec7814685ea146a9fb715e
 # --- build ---
 : "${JOBS:=6}"            # ninja jobs: ArkUI compiles take 1-2 GB each; 6 fits in ~24 GB RAM
 : "${SYNC_JOBS:=6}"
+# ccache: hb puts it in $CCACHE_BASE/.ccache (default $HOME/.ccache, up to 100 GB); keep it with the tree
+: "${CCACHE_BASE:=$WORK_DIR}"
+: "${CCACHE_MAXSIZE:=100G}"
 KERNEL_RELEASE=5.10.194-sdm845
 OH_CLANG_BIN=$OH_ROOT/prebuilts/clang/ohos/linux-x86_64/llvm/bin
 # Boot image layout of the OnePlus 6 bootloader (header v0, Image.gz + appended DTB).

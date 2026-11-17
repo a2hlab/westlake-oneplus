@@ -9,6 +9,7 @@ set -euo pipefail
 unset CONDA_PREFIX CONDA_DEFAULT_ENV PYTHONPATH VIRTUAL_ENV
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOST_DIR/bin
 export LD_LIBRARY_PATH=$HOST_DIR/lib      # libtinfo.so.5 for the mingw clang (00-host-setup.sh)
+export CCACHE_BASE CCACHE_MAXSIZE         # cache in $CCACHE_BASE/.ccache, not in $HOME
 cd "$OH_ROOT"
 
 # --deps-guard false: the post-build dependency-policy check (deps_guard, Passthrough rules) fails for this product.
