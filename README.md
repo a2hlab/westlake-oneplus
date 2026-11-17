@@ -19,6 +19,17 @@ RAM-booted from the PC (`fastboot boot`), so the boot partitions are never flash
 | `bootevent.boot.completed`, 45 system apps installed, launcher + SystemUI running | yes |
 | Wi-Fi, Bluetooth, audio, modem, camera, sensors, suspend/resume | not checked yet |
 
+How this was verified (2026-11-17):
+- Applying the port's patches and ours to the pinned commits gives exactly the files of the tested tree (checked
+  per project, blob by blob).
+- From a clean clone of this repository, `01-sync.sh` brings all 505 projects to the pinned commits, and
+  `02-prebuilts.sh` and `03-apply-patches.sh` apply every patch cleanly.
+- Images built by `04`-`06`, installed by `10-install.sh` and started by `11-boot-oh.sh` reach the launcher;
+  `check-oh.sh` reports OpenHarmony-6.1.0.31, kernel 5.10.194-sdm845, `bootevent.boot.completed=true`,
+  45 apps installed, launcher and SystemUI running.
+- A full from-scratch build (`04`-`06` on the clean clone, empty ccache) was started; see the commit history for
+  its result.
+
 Known limitations:
 - `/data` is a RAM disk (tmpfs). Nothing persists across reboots and every boot is a first boot (about 45 s
   of system-app installation before the launcher appears). The phone's own `userdata` stays Android's.
@@ -61,6 +72,7 @@ tool paths, phone serial. Put your own values in `scripts/local.sh` (git-ignored
 scripts/10-install.sh       # phone in Android (slot A), root adb: backs up the boot/dtbo/vbmeta partitions,
                             # writes system_b + vendor_b, erases dtbo_b, makes slot B active
 scripts/11-boot-oh.sh       # RAM-boots OH from fastboot, Android or OH; waits for hdc
+scripts/check-oh.sh         # version, boot completion, apps, launcher/SystemUI, screenshot
 scripts/12-boot-android.sh  # back to Android on slot A
 ```
 
