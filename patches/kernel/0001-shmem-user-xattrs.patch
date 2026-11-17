@@ -1,0 +1,32 @@
+tmpfs: support user.* extended attributes (upstream since Linux 6.6).
+
+OpenHarmony labels every relational database file with the user.security xattr (data security level).
+With /data on tmpfs the label cannot be set on 5.10, RdbStore open fails with E_CONFIG_INVALID_CHANGE
+(27394118), the bundle manager installs no app and the phone stays on the boot animation.
+
+diff --git a/mm/shmem.c b/mm/shmem.c
+index e173d83b4..19279c4d5 100644
+--- a/mm/shmem.c
++++ b/mm/shmem.c
+@@ -3301,6 +3301,13 @@ static const struct xattr_handler shmem_trusted_xattr_handler = {
+ 	.set = shmem_xattr_handler_set,
+ };
+ 
++/* user.* xattrs on tmpfs (upstream since 6.6): OpenHarmony labels its databases with user.security */
++static const struct xattr_handler shmem_user_xattr_handler = {
++	.prefix = XATTR_USER_PREFIX,
++	.get = shmem_xattr_handler_get,
++	.set = shmem_xattr_handler_set,
++};
++
+ static const struct xattr_handler *shmem_xattr_handlers[] = {
+ #ifdef CONFIG_TMPFS_POSIX_ACL
+ 	&posix_acl_access_xattr_handler,
+@@ -3308,6 +3315,7 @@ static const struct xattr_handler *shmem_xattr_handlers[] = {
+ #endif
+ 	&shmem_security_xattr_handler,
+ 	&shmem_trusted_xattr_handler,
++	&shmem_user_xattr_handler,
+ 	NULL
+ };
+ 

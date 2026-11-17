@@ -1,0 +1,21 @@
+Host builds (gn host_toolchain) compile against the build machine's libstdc++. GCC 13+ (Ubuntu 24.04)
+no longer includes <cstdint>/<cstdlib>/<cstring> transitively, so several host tools fail with
+'uint8_t was not declared'. Force-include them for linux/x64 host C++ only (target code is unaffected).
+
+diff --git a/config/compiler/BUILD.gn b/config/compiler/BUILD.gn
+index be3d7ed5..1980ae65 100755
+--- a/config/compiler/BUILD.gn
++++ b/config/compiler/BUILD.gn
+@@ -546,6 +546,12 @@ config("compiler") {
+     }
+   }
+ 
++  # Host builds use the build machine's libstdc++; GCC 13+ (Ubuntu 24.04) no longer
++  # pulls <cstdint> in transitively, which breaks host tools that rely on it.
++  if (is_linux && current_os == "linux" && current_cpu == "x64") {
++    cflags_cc += [ "-include", "cstdint", "-include", "cstdlib", "-include", "cstring" ]
++  }
++
+   if (is_mac) {
+     # The system libc++ on Mac doesn't have aligned allocation in C++17.
+     defines += [ "_LIBCPP_HAS_NO_ALIGNED_ALLOCATION" ]

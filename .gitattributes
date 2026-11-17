@@ -1,0 +1,2 @@
+# Patches carry CRLF lines (the board's init.fajita.cfg uses CRLF); never convert them.
+*.patch -text

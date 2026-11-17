@@ -1,0 +1,14 @@
+maple_util/utils.h uses uint8_t etc. without <cstdint>; GCC 13 host builds of the ark AOT compiler fail.
+
+diff --git a/ecmascript/compiler/codegen/maple/maple_util/include/utils.h b/ecmascript/compiler/codegen/maple/maple_util/include/utils.h
+index 4458a73a1..4a58578d3 100644
+--- a/ecmascript/compiler/codegen/maple/maple_util/include/utils.h
++++ b/ecmascript/compiler/codegen/maple/maple_util/include/utils.h
+@@ -15,6 +15,7 @@
+ 
+ #ifndef MAPLE_UTIL_INCLUDE_UTILS_H
+ #define MAPLE_UTIL_INCLUDE_UTILS_H
++#include <cstdint>
+ #include <type_traits>
+ #include <limits>
+ #include <vector>

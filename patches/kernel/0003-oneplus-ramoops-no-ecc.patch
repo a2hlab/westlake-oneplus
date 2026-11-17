@@ -1,0 +1,16 @@
+sdm845-oneplus-common: ramoops without ECC so the record layout matches the stock Android kernel's
+(bring-up leftover; on this phone the region does not survive a reboot anyway).
+
+diff --git a/arch/arm64/boot/dts/qcom/sdm845-oneplus-common.dtsi b/arch/arm64/boot/dts/qcom/sdm845-oneplus-common.dtsi
+index 3b90c172f..5fa59c6f1 100644
+--- a/arch/arm64/boot/dts/qcom/sdm845-oneplus-common.dtsi
++++ b/arch/arm64/boot/dts/qcom/sdm845-oneplus-common.dtsi
+@@ -57,7 +57,7 @@
+ 			ftrace-size = <0x40000>;
+ 			pmsg-size = <0x200000>;
+ 			devinfo-size = <0x1000>;
+-			ecc-size = <16>;
++			ecc-size = <0>;
+ 		};
+ 	};
+ 

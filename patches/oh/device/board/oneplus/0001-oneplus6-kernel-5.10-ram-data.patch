@@ -1,0 +1,214 @@
+Run the OnePlus 6T (fajita) board config on a OnePlus 6 (enchilada) with the 5.10.194 kernel and /data in RAM:
+- modules: use the 5.10.194-sdm845 module set + load list instead of 6.6.101 (modules come from scripts/04-build-kernel.sh)
+- fstab.fajita: no /data entry (the phone's own userdata stays Android's); init.fajita.cfg mounts a tmpfs on /data
+- init.fajita.cfg: the system init.cfg creates /data/service/el0/* and runs load_access_token_id BEFORE this vendor
+  pre-init job, i.e. on the read-only root; redo that on the tmpfs, otherwise every native service gets token 0
+  (samgr: AddSystemAbilityInner PERMISSION DENIED) and init panics the kernel
+- init.fajita.usb.cfg: the dwc3 controller is a600000.dwc3 on 5.10 (a600000.usb is the 6.6 name); hdc needs it
+- logdump.sh + service: optional boot-log channel (only with op6.logdump=1 on the kernel command line)
+
+diff --git a/fajita/cfg/BUILD.gn b/fajita/cfg/BUILD.gn
+index 2faed64..fc78b05 100755
+--- a/fajita/cfg/BUILD.gn
++++ b/fajita/cfg/BUILD.gn
+@@ -48,6 +48,13 @@ ohos_prebuilt_etc("init.fajita.sh") {
+   part_name = "qualcomm_products"
+ }
+ 
++ohos_prebuilt_etc("logdump.sh") {
++  install_enable = true
++  source = "logdump.sh"
++  install_images = [ chipset_base_dir ]
++  part_name = "qualcomm_products"
++}
++
+ ohos_prebuilt_etc("init.insmod.sh") {
+   install_enable = true
+   source = "init.insmod.sh"
+@@ -71,6 +78,7 @@ group("init_configs") {
+     ":init.fajita.usb.cfg",
+     ":init.fajita.sh",
+     ":init.insmod.sh",
++    ":logdump.sh",
+     ":modprobe",
+   ]
+ }
+diff --git a/fajita/cfg/fstab.fajita b/fajita/cfg/fstab.fajita
+index 10e290a..2e575d0 100755
+--- a/fajita/cfg/fstab.fajita
++++ b/fajita/cfg/fstab.fajita
+@@ -2,5 +2,4 @@
+ #<src>                                                  <mnt_point> <type>    <mnt_flags and options>                              <fs_mgr_flags>
+ /dev/block/sda14             /usr       ext4     ro,barrier=1  wait,required
+ /dev/block/sde44             /vendor    ext4     ro,barrier=1  wait,required
+-/dev/block/sda18             /data      f2fs     discard,noatime,nosuid,nodev,fscrypt=2:aes-256-cts:aes-256-xts,usrquota  wait,check,fileencryption=software,quota
+ /dev/block/sda3              /misc      none     none  wait,required
+\ No newline at end of file
+diff --git a/fajita/cfg/init.fajita.cfg b/fajita/cfg/init.fajita.cfg
+index a9ef35c..f2a34ed 100755
+--- a/fajita/cfg/init.fajita.cfg
++++ b/fajita/cfg/init.fajita.cfg
+@@ -5,6 +5,16 @@
+     "jobs" : [{
+             "name" : "pre-init",
+             "cmds" : [
++                "mount tmpfs tmpfs /data nosuid nodev noatime mode=0771,size=4g",
++                "chown system system /data",
++                "chmod 0771 /data",
++                "mkdir /data/service 0711 root root",
++                "mkdir /data/service/el0 0711 root root",
++                "mkdir /data/service/el0/startup 0755 root root",
++                "mkdir /data/service/el0/startup/init 0755 root root",
++                "mkdir /data/service/el0/access_token 0750 root access_token",
++                "load_access_token_id ",
++                "start logdump",
+                 "export LIBGL_DRIVERS_PATH /vendor/lib64/chipsetsdk",
+                 "exec /system/bin/sh /vendor/etc/init.insmod.sh",
+                 "write /proc/sys/vm/min_free_kbytes 10240",
+@@ -63,5 +73,15 @@
+                 "chmod 0777 /sys/class/backlight/ae94000.dsi.0/max_brightness"
+             ]
+         }
++    ],
++    "services" : [{
++            "name" : "logdump",
++            "path" : ["/system/bin/sh", "/vendor/etc/logdump.sh"],
++            "uid" : "root",
++            "gid" : ["root", "log", "system"],
++            "once" : 1,
++            "sandbox" : 0,
++            "start-mode" : "condition"
++        }
+     ]
+-}
+\ No newline at end of file
++}
+diff --git a/fajita/cfg/init.fajita.usb.cfg b/fajita/cfg/init.fajita.usb.cfg
+index 8bef251..aac166c 100755
+--- a/fajita/cfg/init.fajita.usb.cfg
++++ b/fajita/cfg/init.fajita.usb.cfg
+@@ -24,7 +24,7 @@
+                 "symlink /config/usb_gadget/g1/configs/b.1 /config/usb_gadget/g1/os_desc/b.1",
+                 "mount functionfs hdc /dev/usb-ffs/hdc uid=2000,gid=2000",
+                 "setparam sys.usb.configfs 1",
+-                "setparam sys.usb.controller a600000.usb"
++                "setparam sys.usb.controller a600000.dwc3"
+             ]
+         }, {
+             "name" : "param:sys.usb.config=none && param:sys.usb.configfs=1",
+diff --git a/fajita/cfg/init.insmod.sh b/fajita/cfg/init.insmod.sh
+index 81c1af7..47cfdd4 100644
+--- a/fajita/cfg/init.insmod.sh
++++ b/fajita/cfg/init.insmod.sh
+@@ -5,7 +5,7 @@
+ # Confidential and Proprietary - Qualcomm Technologies, Inc.
+ #=============================================================================
+ 
+-VENDOR_DIR="/system/lib/modules/6.6.101-sdm845"
++VENDOR_DIR="/system/lib/modules/5.10.194-sdm845"
+ 
+ MODPROBE="/system/bin/modprobe"
+ 
+diff --git a/fajita/cfg/logdump.sh b/fajita/cfg/logdump.sh
+new file mode 100644
+index 0000000..c263a1a
+--- /dev/null
++++ b/fajita/cfg/logdump.sh
+@@ -0,0 +1,28 @@
++#!/system/bin/sh
++# Optional bring-up log channel for the OnePlus 6 (enchilada). Off unless the kernel command line has
++# op6.logdump=1. Every 4 s it writes the kernel log, process list and mounts to the unused space at the
++# end of system_b (/dev/block/sda14, past the 2.5 GiB OH system image), where Android (slot A, root) can
++# read it back after a hang:  dd if=/dev/block/by-name/system_b bs=4096 skip=655360 count=1024
++grep -q "op6.logdump=1" /proc/cmdline || exit 0
++DEV=/dev/block/sda14
++OFF=655360                      # 4 KiB blocks = 2684354560 bytes, the OH system image size
++SIZE=$(cat /sys/class/block/sda14/size 2>/dev/null)
++[ "$SIZE" = "5857280" ] || exit 0   # 512-byte sectors of the OnePlus 6 system_b; anything else: do nothing
++dd if=/dev/zero of=$DEV bs=4096 seek=$OFF count=1024 conv=notrunc 2>/dev/null
++n=0
++while [ $n -lt 2000 ]; do
++  {
++    echo "=== LOGDUMP n=$n uptime=$(cat /proc/uptime)"
++    dmesg
++    echo "=== PS"; ps -ef
++    echo "=== MOUNTS"; cat /proc/mounts
++    echo "=== FAULTLOG"; ls -l /data/log/faultlog/temp 2>&1 | tail -n 30
++    for f in $(ls -t /data/log/faultlog/temp/cppcrash-* 2>/dev/null | head -n 6); do echo "--- $f"; head -n 60 $f; done
++    echo "=== USB"; ls /sys/class/udc 2>&1; cat /config/usb_gadget/g1/UDC 2>&1
++    echo "=== END n=$n"
++  } > /dev/logdump.txt 2>&1
++  dd if=/dev/logdump.txt of=$DEV bs=4096 seek=$OFF count=1024 conv=notrunc 2>/dev/null
++  sync
++  n=$((n+1))
++  sleep 4
++done
+diff --git a/fajita/modules/BUILD.gn b/fajita/modules/BUILD.gn
+index c644486..b9295a1 100644
+--- a/fajita/modules/BUILD.gn
++++ b/fajita/modules/BUILD.gn
+@@ -13,13 +13,13 @@
+ 
+ # import("modules_path_194.gni")
+ # import("//build/ohos.gni")
+-import("modules_path_101.gni")
++import("modules_path_194.gni")
+ 
+ ohos_prebuilt_etc("modules.load") {
+   source = "modules.load"
+   install_enable = true
+   install_images = [ system_base_dir ]
+-  module_install_dir = "lib/modules/6.6.101-sdm845"
++  module_install_dir = "lib/modules/5.10.194-sdm845"
+   part_name = "qualcomm_products"
+ }
+ 
+diff --git a/fajita/modules/modules.load b/fajita/modules/modules.load
+index 02648b1..2424275 100644
+--- a/fajita/modules/modules.load
++++ b/fajita/modules/modules.load
+@@ -1,3 +1,7 @@
++i2c_qcom_geni
++rmi_core
++rmi_i2c
++qcom_spmi_haptics
+ joydev
+ qcom_glink_smem
+ icc_bwmon
+@@ -16,9 +20,14 @@ mac80211
+ ath
+ qcom_q6v5_mss
+ ipa
++coresight
++coresight_funnel
++coresight_replicator
+ stm_core
+ ath10k_core
+ qcom_rng
++coresight_tmc
++coresight_stm
+ qcom_stats
+ ath10k_snoc
+ reset_qcom_pdc
+@@ -27,6 +36,7 @@ ecc
+ ecdh_generic
+ mc
+ soundwire_bus
++snd_soc_tfa98xx
+ videodev
+ snd_soc_rl6231
+ videobuf2_common
+@@ -40,9 +50,13 @@ snd_soc_sdm845
+ venus_core
+ btqca
+ hci_uart
++bq27xxx_battery
+ rtc_pm8xxx
+ crct10dif_ce
++bq27xxx_battery_i2c
+ leds_qcom_flash
++qcom_spmi_rradc
++qcom_pmi8998_charger
+ rpmsg_ctrl
+ qrtr_smd
+ fastrpc

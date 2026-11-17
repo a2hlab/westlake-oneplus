@@ -1,0 +1,16 @@
+build.sh is switched to Node 18 (the SDK build's npm needs it), but jsframework's gen_snapshot uses
+rollup-plugin-typescript2, which fails under Node 18 (strip.native.min.js is never produced). Pin it to Node 14.
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 852d27a..d11e13f 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -34,7 +34,7 @@ action("gen_snapshot") {
+   use_mac = host_os == "mac"
+ 
+   node_modules = "//prebuilts/build-tools/common/js-framework/node_modules"
+-  nodejs_path = "//prebuilts/build-tools/common/nodejs/current"
++  nodejs_path = "//prebuilts/build-tools/common/nodejs/node-v14.21.1-linux-x64"  # rollup-plugin-typescript2 here needs Node 14
+   if (use_mac) {
+     is_mac = "true"
+   } else {

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  OnePlus 6/6T community port (https://gitee.com/ohos_port), pinned to the commits this build was tested with.
+  scripts/01-sync.sh copies this file to .repo/local_manifests/. The OpenHarmony projects themselves come from the
+  release tag OpenHarmony-v6.1-Release (every project at that tag); manifests/oh61-full-pinned.xml lists all SHAs.
+
+  Branches the commits were taken from (2026-11-16):
+    device_board_oneplus, device_soc_qualcomm        OpenHarmony-6.1-LTS
+    vendor_oneplus, linux-sdm845, alsa-plugins,
+    third_party_eudev                                OpenHarmony-5.1-Release (no 6.1 branch exists)
+-->
+<manifest>
+  <remote fetch="https://gitee.com/ohos_port" name="ohport"/>
+  <project name="device_board_oneplus" path="device/board/oneplus" remote="ohport" revision="1f7f8bab1327a70d3192b1ab63c1836f43e55954"/>
+  <project name="device_soc_qualcomm" path="device/soc/qualcomm" remote="ohport" revision="90c96042d5599ada7f3a10b558e5d5e5a6cbc3a2"/>
+  <project name="vendor_oneplus" path="vendor/oneplus" remote="ohport" revision="40249a52bf21eca8e7f659517a6b8956a4138b15"/>
+  <project name="linux-sdm845" path="kernel/linux/linux-sdm845" remote="ohport" revision="64ca8fe1374a2a15498afff641bb52d5a218fbb5"/>
+  <project name="alsa-plugins" path="third_party/alsa-plugins" remote="ohport" revision="61ccf67f62c2d456fdd1d6a70defb6e27f9b10eb"/>
+  <project name="third_party_eudev" path="third_party/eudev" remote="ohport" revision="d75349fe391eae721d294331730eb5176c2a6c47"/>
+</manifest>

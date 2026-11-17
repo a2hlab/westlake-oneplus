@@ -1,0 +1,246 @@
+OH 6.1 product config for fajita (the port's vendor repo has no 6.1 branch):
+- add the parts OH 6.1 requires that the 5.1 config lacks (rust_libc, skia, notofonts, alsa-lib, ... as in rk3568)
+- drop init_feature_loader (unknown in 6.1) and wifi_feature_with_hdi_chip_supported=false (HalDeviceManager build error)
+- power_suspend.json: no auto-suspend on screen timeout. Suspend makes dwc3 disconnect, which drops hdc
+  (the port's USB_NOTES.md issue B1, route 1). The power key still suspends.
+
+diff --git a/fajita/config.json b/fajita/config.json
+index ddd18b3..1064010 100755
+--- a/fajita/config.json
++++ b/fajita/config.json
+@@ -12,7 +12,10 @@
+   "build_selinux": false,
+   "build_seccomp": false,
+   "device_stack_size": 8388608,
+-  "inherit": [ "productdefine/common/inherit/rich.json", "productdefine/common/inherit/chipset_common.json" ],
++  "inherit": [
++    "productdefine/common/inherit/rich.json",
++    "productdefine/common/inherit/chipset_common.json"
++  ],
+   "subsystems": [
+     {
+       "subsystem": "security",
+@@ -47,7 +50,23 @@
+         },
+         {
+           "component": "drivers_peripheral_ril",
+-          "features":[]
++          "features": []
++        },
++        {
++          "component": "drivers_interface_lpplayer",
++          "features": []
++        },
++        {
++          "component": "drivers_interface_bluetooth",
++          "features": []
++        },
++        {
++          "component": "drivers_tools",
++          "features": []
++        },
++        {
++          "component": "drivers_adapter",
++          "features": []
+         }
+       ]
+     },
+@@ -131,15 +150,14 @@
+         {
+           "component": "init",
+           "features": [
+-            "init_feature_ab_partition = false",
+-            "init_feature_loader = false"
++            "init_feature_ab_partition = false"
+           ]
+         }
+       ]
+     },
+     {
+-    "subsystem": "ai",
+-    "components": [
++      "subsystem": "ai",
++      "components": [
+         {
+           "component": "mindspore",
+           "features": []
+@@ -165,9 +183,8 @@
+           "features": [
+             "wifi_feature_non_seperate_p2p = true",
+             "wifi_feature_non_hdf_driver = true",
+-            "wifi_feature_p2p_random_mac_addr = false",
+-            "wifi_feature_with_hdi_chip_supported = false"
+-         ]
++            "wifi_feature_p2p_random_mac_addr = false"
++          ]
+         }
+       ]
+     },
+@@ -181,6 +198,14 @@
+             "audio_framework_feature_opensl_es = true",
+             "audio_framework_feature_support_os_account = false"
+           ]
++        },
++        {
++          "component": "video_processing_engine",
++          "features": []
++        },
++        {
++          "component": "image_framework",
++          "features": []
+         }
+       ]
+     },
+@@ -211,6 +236,62 @@
+           "features": [
+             "wpa_supplicant_driver_nl80211 = true"
+           ]
++        },
++        {
++          "component": "rust_libc",
++          "features": []
++        },
++        {
++          "component": "pcre2",
++          "features": []
++        },
++        {
++          "component": "noto-cjk",
++          "features": []
++        },
++        {
++          "component": "notofonts",
++          "features": []
++        },
++        {
++          "component": "tex-hyphen",
++          "features": []
++        },
++        {
++          "component": "qrcodegen",
++          "features": []
++        },
++        {
++          "component": "alsa-lib",
++          "features": []
++        },
++        {
++          "component": "protobuf",
++          "features": []
++        },
++        {
++          "component": "abseil-cpp",
++          "features": []
++        },
++        {
++          "component": "libusb",
++          "features": []
++        },
++        {
++          "component": "skia",
++          "features": []
++        },
++        {
++          "component": "optimized_routines",
++          "features": []
++        },
++        {
++          "component": "typescript",
++          "features": []
++        },
++        {
++          "component": "libtiff",
++          "features": []
+         }
+       ]
+     },
+@@ -259,11 +340,19 @@
+         {
+           "component": "vulkan-headers",
+           "features": []
++        },
++        {
++          "component": "graphics_effect",
++          "features": []
++        },
++        {
++          "component": "graphic_utils_lite",
++          "features": []
+         }
+       ]
+     },
+     {
+-      "subsystem":"hiviewdfx",
++      "subsystem": "hiviewdfx",
+       "components": [
+         {
+           "component": "hiview",
+@@ -273,6 +362,55 @@
+           ]
+         }
+       ]
++    },
++    {
++      "subsystem": "developtools",
++      "components": [
++        {
++          "component": "smartperf_host",
++          "features": []
++        },
++        {
++          "component": "ace_ets2bundle",
++          "features": []
++        }
++      ]
++    },
++    {
++      "subsystem": "ability",
++      "components": [
++        {
++          "component": "idl_tool",
++          "features": []
++        }
++      ]
++    },
++    {
++      "subsystem": "telephony",
++      "components": [
++        {
++          "component": "core_service",
++          "features": []
++        }
++      ]
++    },
++    {
++      "subsystem": "sdk",
++      "components": [
++        {
++          "component": "sdk",
++          "features": []
++        }
++      ]
++    },
++    {
++      "subsystem": "global",
++      "components": [
++        {
++          "component": "font_manager",
++          "features": []
++        }
++      ]
+     }
+   ]
+ }
+diff --git a/fajita/custom_conf/power_suspend.json b/fajita/custom_conf/power_suspend.json
+index 48d75d7..724963c 100644
+--- a/fajita/custom_conf/power_suspend.json
++++ b/fajita/custom_conf/power_suspend.json
+@@ -4,7 +4,7 @@
+         "delayMs": 0
+     },
+     "timeout": {
+-        "action": 1,
++        "action": 0,
+         "delayMs": 0
+     },
+     "lid": {
