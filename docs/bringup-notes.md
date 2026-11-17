@@ -103,5 +103,5 @@ OH is put on slot B only and RAM-booted, so Android on slot A keeps working.
 - **ramoops does not help here:** the OH and Android kernels use the same ramoops region (0xac300000, 4 MB), but
   no record survives a reboot on this phone, not even Android to Android.
 - **WSL + Windows tools:** a long-running WSL shell can hold a dead interop socket (`UtilAcceptVsock ... accept4
-  failed 110`; every `.exe` call fails). Point `WSL_INTEROP` at the newest `/run/WSL/*_interop`
-  (`config.sh` does).
+  failed 110`; every `.exe` call fails). Point `WSL_INTEROP` at a `/run/WSL/*_interop` socket that answers
+  (not necessarily the newest one); `config.sh` tests them and picks a live one.

@@ -48,8 +48,12 @@ tool_path() {  # tool_path TOOL FILE -> FILE as that tool can open it
   if is_win_tool "$1"; then wslpath -w "$f"; else printf '%s\n' "$f"; fi
 }
 if [ -n "${WSL_DISTRO_NAME:-}" ] && { is_win_tool "$ADB" || is_win_tool "$FASTBOOT" || is_win_tool "$HDC"; }; then
-  # long-lived shells can hold a dead interop socket; use the newest one
-  newest=$(ls -t /run/WSL/*_interop 2>/dev/null | head -1); [ -n "$newest" ] && export WSL_INTEROP=$newest
+  # Long-lived WSL shells can hold a dead interop socket ("UtilAcceptVsock ... accept4 failed 110": every .exe
+  # call fails). Keep the current one if it answers, otherwise take the first one under /run/WSL that does.
+  interop_ok() { (cd / && WSL_INTEROP=$1 timeout 5 cmd.exe /c exit 0 </dev/null >/dev/null 2>&1); }
+  if [ -z "${WSL_INTEROP:-}" ] || ! interop_ok "$WSL_INTEROP"; then
+    for s in $(ls -t /run/WSL/*_interop 2>/dev/null); do interop_ok "$s" && { export WSL_INTEROP=$s; break; }; done
+  fi
 fi
 adb_()      { "$ADB" ${SERIAL:+-s "$SERIAL"} "$@" </dev/null; }
 fastboot_() { "$FASTBOOT" ${SERIAL:+-s "$SERIAL"} "$@" </dev/null; }
