@@ -113,6 +113,10 @@ Then for example `hdc shell`, `hdc shell snapshot_display -f /data/local/tmp/s.j
 flash the saved `dtbo_b.img` (`fastboot flash dtbo_b phone-backup/dtbo_b.img`) and let an Android update or a
 flash rewrite `system_b`/`vendor_b`.
 
+## Android apps with Westlake
+
+[westlake/](westlake/README.md) runs Android apps on this build with [Westlake](https://github.com/a2hlab/westlake): Fossify Clock opens over the host app's window and takes taps on the touchscreen. Five scripts: the phone's runtime pieces (GPU stand-in, firmware list), the window bridge for OH's classic window manager, and per boot the phone tools, the framework and the app.
+
 ## What the patches change
 
 | Patch | Why |
@@ -146,6 +150,7 @@ manifests/oh61-full-pinned.xml  every project of the tested tree with its commit
 patches/oh/<project path>/      patches for OpenHarmony projects
 patches/kernel/                 kernel patches + config fragment
 scripts/                        host setup, sync, build, install, boot (00..12), helpers
+westlake/                       Android apps with Westlake on this build (01..05, tap.sh)
 docs/bringup-notes.md           how it was brought up, failure by failure
 ```
 
