@@ -4,7 +4,7 @@ SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_DIR=$(dirname "$SCRIPTS_DIR")
 [ -f "$SCRIPTS_DIR/local.sh" ] && . "$SCRIPTS_DIR/local.sh"
 
-# --- where things live (the OH tree + outputs need ~350 GB) ---
+# --- where things live (~200 GB after a build, ccache up to 100 GB more: keep ~300 GB free) ---
 : "${WORK_DIR:=$HOME/oh61-oneplus6}"
 : "${OH_ROOT:=$WORK_DIR/src}"                         # OpenHarmony 6.1 repo client
 : "${KERNEL_SRC:=$OH_ROOT/kernel/linux/linux-sdm845}"  # ohos_port linux-sdm845 (pinned in manifests/ohport.xml)

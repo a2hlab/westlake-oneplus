@@ -1,6 +1,6 @@
 #!/bin/bash
 # Create the source tree: OpenHarmony at the release tag + the OnePlus port repos at the tested commits.
-# Download is ~100 GB; the tree after the build needs ~350 GB.
+# Download is ~100 GB; the tree after the build uses ~200 GB (ccache can grow to 100 GB over rebuilds; keep ~300 GB free).
 set -euo pipefail
 . "$(dirname "$0")/config.sh"
 export PATH="$HOST_DIR/bin:$PATH"

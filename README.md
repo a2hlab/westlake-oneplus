@@ -27,8 +27,14 @@ How this was verified (2026-11-17):
 - Images built by `04`-`06`, installed by `10-install.sh` and started by `11-boot-oh.sh` reach the launcher;
   `check-oh.sh` reports OpenHarmony-6.1.0.31, kernel 5.10.194-sdm845, `bootevent.boot.completed=true`,
   45 apps installed, launcher and SystemUI running.
-- A full from-scratch build (`04`-`06` on the clean clone, empty ccache) was started; see the commit history for
-  its result.
+- From-scratch builds (empty `out/` and ccache) found two gaps that an incremental tree never shows, both fixed
+  here: a missing build-order dependency in the port's display driver (a clean parallel build failed with
+  `'v1_2/display_composer_type.h' file not found`, see [`device/soc/qualcomm`](patches/oh/device/soc/qualcomm)),
+  and `kmod` (`depmod`) missing on minimal Ubuntu installs (`00-host-setup.sh`).
+- With those fixes, a full build of the fresh clone's tree (`04`-`06`, empty `out/` and ccache) in a clean
+  `ubuntu:24.04` container on a 72-thread server took about 2 hours, and its images, installed by
+  `10-install.sh` and started by `11-boot-oh.sh`, reach the launcher: `check-oh.sh` reports OpenHarmony-6.1.0.31,
+  boot completed 37 s after the RAM boot, 45 apps installed, launcher and SystemUI running.
 
 Known limitations:
 - `/data` is a RAM disk (tmpfs). Nothing persists across reboots and every boot is a first boot (about 45 s
@@ -41,8 +47,11 @@ Known limitations:
 
 - A OnePlus 6 with an **unlocked bootloader**, running Android from **slot A** with **root adb** (`adb root`
   works, e.g. LineageOS with rooted debugging). The install writes slot B from that Android.
-- A build host: x86_64 Linux (Ubuntu 22.04 or 24.04; WSL2 works), **~350 GB** free disk, **24 GB+ RAM** for the
-  default 6 build jobs, and several hours for the first build.
+- A build host: x86_64 Linux (Ubuntu 22.04 or 24.04, also a minimal `ubuntu:24.04` container; WSL2 works) with
+  **~300 GB** free disk and about **2 GB of RAM per build job** (`JOBS`, default 6: fits in 24 GB; 64 jobs ran
+  in 138 GB). A finished build uses about 200 GB (88 GB sources, 96 GB `out/`, 17 GB ccache; the ccache can grow
+  to 100 GB over rebuilds). A full build takes about 2 hours with 64 jobs on a 72-thread server, and over
+  8 hours with 6 jobs on a 16-core laptop.
 - `adb` and `fastboot` (Android platform-tools) and `hdc` (from an OpenHarmony SDK, `toolchains/hdc`).
   On WSL with the Windows tools, point `ADB`, `FASTBOOT` and `HDC` at the `.exe` files: the scripts hand them
   `\\wsl.localhost\...` paths, so images stay on the Linux disk. Windows also needs a driver for the phone's

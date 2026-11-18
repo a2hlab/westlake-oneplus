@@ -39,6 +39,8 @@ OH is put on slot B only and RAM-booted, so Android on slot A keeps working.
 | gn: `init_feature_loader` unknown, part `rust_libc` not found, CFI sanitize assert | the port's product config is for 5.1 | `patches/oh/vendor/oneplus`, `--gn-args allow_sanitize_debug=true` |
 | wifi: `HalDeviceManager` undeclared | `wifi_feature_with_hdi_chip_supported = false` no longer builds in 6.1 | feature removed (`patches/oh/vendor/oneplus`) |
 | build killed (out of memory) | ArkUI compiles take 1-2 GB each; hb's `--jobs` is ignored | `--ninja-args=-j6` (`JOBS`) |
+| clean build only: `'v1_2/display_composer_type.h' file not found` (`display_composer_vdi_impl.cpp`) | the sdm845 display libraries include generated IDL headers (v1.1-v1.3) but depend only on the v1.0 header targets, so a clean parallel build can compile them before the headers exist | header-only IDL dependencies (`patches/oh/device/soc/qualcomm`) |
+| `'make modules_install' requires depmod`; `modules.dep` missing | minimal Ubuntu installs (e.g. the `ubuntu:24.04` image) have no `kmod` | `kmod` in `00-host-setup.sh` |
 | build exits 1 after all images are written | post-build `deps_guard` dependency-policy check (Passthrough rules) | `--deps-guard false` |
 
 ## Booting the kernel
