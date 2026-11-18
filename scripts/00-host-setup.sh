@@ -18,11 +18,11 @@ if [ "$(id -u)" = 0 ]; then
     gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses-dev lib32stdc++6 lib32z1 lib32z1-dev libncurses-dev \
     x11proto-core-dev libx11-dev libgl1-mesa-dev libxcursor-dev libxrandr-dev libxinerama-dev \
     libxml2-utils xsltproc gnutls-bin device-tree-compiler genext2fs abootimg libelf-dev libssl-dev \
-    cpio f2fs-tools e2fsprogs dwarves \
+    cpio f2fs-tools e2fsprogs dwarves kmod \
     || echo "warning: apt-get install reported errors; checking the tools the build needs"
   missing=""
   for t in git git-lfs curl python3 ruby javac flex bison gperf bc zip unzip ccache cmake ninja m4 autoconf \
-           automake autopoint libtoolize msgfmt pkg-config gcc g++ dtc genext2fs cpio mkfs.f2fs pahole xsltproc; do
+           automake autopoint libtoolize msgfmt pkg-config gcc g++ dtc genext2fs cpio mkfs.f2fs pahole xsltproc depmod; do
     command -v "$t" >/dev/null || missing="$missing $t"
   done
   [ -z "$missing" ] || die "still missing after apt:$missing"
