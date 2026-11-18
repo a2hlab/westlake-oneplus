@@ -27,11 +27,12 @@ OH transition that never plays (alpha 0, scale 0).
 ## What you need
 
 - the phone running OH from this repo (`scripts/11-boot-oh.sh`), hdc working;
-- a Westlake source-closure directory (`WL_SC`) with Westlake's builds: the framework, boot image, resources,
-  core libraries, ART and native runtime, appspawn, a runtime-library override, the bionic shim, the WebView
-  input, the signed host HAP and a prepared app input (Westlake's build chain makes them);
+- a Westlake source-closure directory (`WL_SC`) with Westlake's builds: the framework and boot image (built from the
+  westlake checkout below: popups are placed by its Java), resources, core libraries, ART and native runtime,
+  appspawn, a runtime-library override, the bionic shim, the WebView input, the signed host HAP and a prepared app
+  input (Westlake's build chain makes them);
 - a westlake checkout with the classic-window-manager fixes (full-screen window with OH's bars as insets, dialogs at
-  their own size) and touchfwd's first-touch fix (`WL_WESTLAKE`,
+  their own size, popups placed where their taps go) and touchfwd's first-touch fix (`WL_WESTLAKE`,
   branch `oneplus-classic-wms`, [westlake#175](https://github.com/a2hlab/westlake/pull/175));
 - a manifest checkout whose `tools/probe_source_app.py` has `--touch-device` (`WL_MANIFEST`, branch
   `oneplus-touch`, [manifest#71](https://github.com/a2hlab/manifest/pull/71)).
@@ -79,3 +80,8 @@ Dialogs: every app window, a dialog too, is such a sub-window, and each draws in
 placement moves inside the display-sized OH window, as on SceneBoard. On the classic window manager that node is
 a render-service node; as the divided-render node it was before, a bounds update reached only one of the two
 copies RenderService kept, and Clock's add-timer dialog was stretched over the whole screen.
+
+Popups (menus, dropdowns): a popup's window is laid out in its parent's frame, as Android does. The framework placed
+it in the display frame instead, below the status bar once the window had OH's bars as insets, so it was drawn a
+status bar lower than its views and taps: on Clock's overflow menu a tap on Settings opened About. A framework built
+from the westlake branch places it where Android does.
