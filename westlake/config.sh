@@ -21,6 +21,9 @@ WL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 : "${WL_HDC:=$HDC}"                     # hdc the Westlake probes run (on WSL: westlake/tools/hdc-retry.sh)
 WL_TOUCH_DEVICE=/dev/input/event1       # Synaptics S3706B (event2 is the volume keys)
 WL_TOUCH_SIZE=1080x2280                 # its raw range 0..1079 x 0..2279 covers the whole screen
+# The classic window manager shows the app's full-screen frame squeezed between the status bar and the
+# navigation bar (108 px each): map that area of the touchscreen onto the frame (X,Y,W,H).
+WL_TOUCH_AREA=0,108,1080,2064
 
 wl_build() {  # wl_build NAME -> directory of a Westlake build
   local n=$1; [ -n "$n" ] || die "a Westlake build is not set (westlake/local.sh)"
