@@ -17,7 +17,7 @@ RAM-booted from the PC (`fastboot boot`), so the boot partitions are never flash
 | Display (DRM/KMS composer, Mesa freedreno on the Adreno 630) | yes |
 | `hdc` over USB (shell, file transfer, screenshots, `reboot bootloader`) | yes |
 | `bootevent.boot.completed`, 45 system apps installed, launcher + SystemUI running | yes |
-| Wi-Fi: Settings > WLAN switches on and lists the networks in range | yes, with images built from this repository since 2026-11-18 (the `v6.1.0.31-r1` release images predate the fix); joining a network not tested yet |
+| Wi-Fi: Settings > WLAN switches on and lists the networks in range | yes, since release `v6.1.0.31-r2` (r1 predates the fix); joining a network not tested yet |
 | Bluetooth | no: the Bluetooth driver host needs a vendor `libbt_vendor.z.so`, which the port does not have |
 | audio | no: the kernel has no sound card |
 | modem, camera, sensors, suspend/resume | not checked yet |

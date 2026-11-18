@@ -6,7 +6,7 @@ over the host's window. These scripts run it on the OnePlus 6 with the OpenHarmo
 
 Verified 2026-11-18: from a fresh boot, `03` → `05` bring up Fossify Clock 1.6.0 (the unmodified APK) with the
 time ticking, and taps on the touchscreen at the places its controls are shown work (the Stopwatch tab opens,
-its start button starts it). Checked on the release images (`v6.1.0.31-r1`) and on images with the Wi-Fi fixes.
+its start button starts it). Checked on the images of release `v6.1.0.31-r2`.
 
 ## What is different from Westlake's test board
 
@@ -53,8 +53,8 @@ repeats calls that a dead WSL interop socket dropped (the probes fail on a lost 
 
 `/data` is a RAM disk on this build, so `03` and `04` are repeated after each boot; nothing is written to the
 phone's partitions. `04` runs without the contract suite: its network contract needs a network connection,
-which the phone does not have on its own (no SIM; Wi-Fi switches on and finds networks with images built from
-this repository since 2026-11-18, joining one is not tested yet), and the launch needs only the preload to pass.
+which the phone does not have on its own (no SIM; Wi-Fi switches on and finds networks since release
+`v6.1.0.31-r2`, joining one is not tested yet), and the launch needs only the preload to pass.
 
 Keep the host app running between launches (`05` does): every host start gets a new window id, and the probe
 reads the id from the host's `window-state.json`. `05` stops the apps of earlier launches: killing appspawn-x
