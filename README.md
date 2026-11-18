@@ -39,7 +39,11 @@ How this was verified (2026-11-17):
 Known limitations:
 - `/data` is a RAM disk (tmpfs). Nothing persists across reboots and every boot is a first boot (about 45 s
   of system-app installation before the launcher appears). The phone's own `userdata` stays Android's.
-- OH is started from a PC each time (`fastboot boot`); a normal power-on boots Android.
+- OH is started from a PC each time (`fastboot boot`). `12-boot-android.sh` goes back to Android; a plain
+  reboot gets there too, but only after slot B (left active by the install) fails to boot and the bootloader
+  falls back to slot A.
+- Avoid Android system updates while you use OH: A/B updates (e.g. LineageOS) install to the inactive slot B,
+  which replaces OH and leaves Android on slot B, where `10-install.sh` will not install.
 - The device reports itself as "Oneplus 6T" / model "Fajita" (strings of the port it is based on).
 - Idle suspend is turned off (it disconnects USB and with it hdc); the power key still suspends.
 

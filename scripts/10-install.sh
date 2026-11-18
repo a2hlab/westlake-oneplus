@@ -9,10 +9,15 @@
 set -euo pipefail
 . "$(dirname "$0")/config.sh"
 sys="$IMAGES_DIR/system.img"; ven="$IMAGES_DIR/vendor.img"
-[ -s "$sys" ] && [ -s "$ven" ] || die "build the images first (05-build-oh.sh)"
+[ -s "$sys" ] && [ -s "$ven" ] || die "no images in $IMAGES_DIR: build them (05-build-oh.sh) or download them (09-get-images.sh)"
 sh_() { adb_ shell "$@" | tr -d '\r'; }
 
 step "checking the phone (Android, slot A, root adb)"
+# The phone may still be booting (e.g. right after 12-boot-android.sh): 'adb root' only works once adbd is up.
+timeout 300 "$ADB" ${SERIAL:+-s "$SERIAL"} wait-for-device </dev/null \
+  || die "no adb device after 5 min (phone in Android with USB debugging on?)"
+for _ in $(seq 1 150); do [ "$(sh_ getprop sys.boot_completed)" = 1 ] && break; sleep 2; done
+[ "$(sh_ getprop sys.boot_completed)" = 1 ] || die "Android did not finish booting"
 adb_ root >/dev/null 2>&1 || true; sleep 3; adb_ wait-for-device
 [ "$(sh_ id -u)" = 0 ] || die "adb is not root; enable rooted debugging (e.g. LineageOS) so 'adb root' works"
 [ "$(sh_ getprop ro.boot.slot_suffix)" = _a ] || die "Android must be running from slot A"
