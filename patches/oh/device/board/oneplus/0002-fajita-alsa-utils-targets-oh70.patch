@@ -1,0 +1,20 @@
+OH 7.0 removed the group("alsa-utils") target from third_party/alsa-utils/BUILD.gn; list its 6.1 members
+(aconnect, alsactl, amixer, aplay, speaker-test) in fajita_group instead.
+
+diff --git a/fajita/BUILD.gn b/fajita/BUILD.gn
+index 1925d4c..73ef64b 100644
+--- a/fajita/BUILD.gn
++++ b/fajita/BUILD.gn
+@@ -29,6 +29,11 @@ group("fajita_group") {
+     "//device/soc/qualcomm/sdm845/hardware/display:display_composer_model",
+     "//device/soc/qualcomm/sdm845/hardware:hardware_group",
+     "//device/soc/qualcomm/sdm845/systemability:sa_group",
+-    "//third_party/alsa-utils:alsa-utils",
++    # OH 7.0 dropped the alsa-utils group target; these are its members in 6.1
++    "//third_party/alsa-utils:aconnect",
++    "//third_party/alsa-utils:alsactl",
++    "//third_party/alsa-utils:amixer",
++    "//third_party/alsa-utils:aplay",
++    "//third_party/alsa-utils:speaker-test",
+   ]
+ }
