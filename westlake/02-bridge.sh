@@ -7,7 +7,8 @@ set -euo pipefail
 . "$(dirname "$0")/config.sh"
 wl_need WL_SC WL_WESTLAKE WL_OVERRIDE WL_NATIVE_RUNTIME
 grep -q 'legacy SUB_WINDOW parent' "$WL_WESTLAKE/framework/window/jni/oh_window_manager_client.cpp" \
-  || die "$WL_WESTLAKE lacks the classic-window-manager fix (see westlake/README.md)"
+  && grep -q 'wl_legacyHostSub' "$WL_WESTLAKE/framework/window/jni/oh_window_manager_client.cpp" \
+  || die "$WL_WESTLAKE lacks the classic-window-manager fixes (see westlake/README.md)"
 ws=$WL_SC/workspace; b=$WL_OUT/bridge; rm -rf "$b"; mkdir -p "$b"
 cd "$WL_WESTLAKE"
 

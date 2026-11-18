@@ -3,6 +3,8 @@
 # interop sockets ("UtilAcceptVsock ... accept4 failed 110"); the Windows side never ran then, so the call is
 # repeated on a socket that answers. Notices go to a log file only: the probes parse the combined output.
 # Set HDC_EXE to hdc.exe (a /mnt/... path). Keeps the working directory (hdc file send takes relative names).
+# westlake-harness device/hdc_wsl.sh picks one proven socket and runs hdc once; on this machine a socket that
+# just passed such a check still failed the next call (2026-11-18), so the call itself is checked and repeated.
 : "${HDC_EXE:?set HDC_EXE to the Windows hdc.exe}"
 LOG=${HDC_RETRY_LOG:-${XDG_RUNTIME_DIR:-/tmp}/hdc-retry.log}
 CACHE=${XDG_RUNTIME_DIR:-/tmp}/hdc-retry-interop

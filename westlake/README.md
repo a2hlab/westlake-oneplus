@@ -16,9 +16,8 @@ build's libraries. Four things differ:
 | | test board | OnePlus 6 | handled by |
 |---|---|---|---|
 | GPU driver | Mali, `libGLES_mali.z.so` | Adreno through Mesa freedreno; no such file | `01` builds an empty stand-in that depends on OH's `libEGL.so`, `libGLESv3.so`, `libbuffer_handle.z.so` |
-| window manager | SceneBoard | the classic window manager (SceneBoard's app is not in OH's public source) | Westlake fix: the activity's sub-window gets the host window as parent, and no OH window animation (`02` builds that bridge) |
+| window manager | SceneBoard | the classic window manager (SceneBoard's app is not in OH's public source) | Westlake fixes (`02` builds that bridge): the activity's sub-window gets the host window as parent, no OH window animation, a full-screen window, and OH's status and navigation bars as the app's insets |
 | touchscreen | `event2`, 1200x1920 | `event1` (Synaptics S3706B), 1080x2280 | `--touch-device` / `--touch-size` of the launch probe |
-| app frame on screen | full screen | squeezed between the status and navigation bars (y 108..2172) | touchfwd maps that area onto the frame (`WL_TOUCH_AREA`, `--touch-area`) |
 | toybox | has `sha256sum`, `chcon` | neither | `03` bind-mounts a `/system/bin` copy with an openssl `sha256sum` and a no-op `chcon` (SELinux is off) |
 
 Without the window-manager fix the app runs and draws but is invisible: the classic window manager refuses the
@@ -31,14 +30,16 @@ OH transition that never plays (alpha 0, scale 0).
 - a Westlake source-closure directory (`WL_SC`) with Westlake's builds: the framework, boot image, resources,
   core libraries, ART and native runtime, appspawn, a runtime-library override, the bionic shim, the WebView
   input, the signed host HAP and a prepared app input (Westlake's build chain makes them);
-- a westlake checkout with the classic-window-manager fix and touchfwd's `WL_TOUCH_AREA` (`WL_WESTLAKE`,
+- a westlake checkout with the classic-window-manager fixes and touchfwd's first-touch fix (`WL_WESTLAKE`,
   branch `oneplus-classic-wms`, [westlake#175](https://github.com/a2hlab/westlake/pull/175));
-- a manifest checkout whose `tools/probe_source_app.py` has `--touch-device` and `--touch-area` (`WL_MANIFEST`,
-  branch `oneplus-touch`, [manifest#71](https://github.com/a2hlab/manifest/pull/71)).
+- a manifest checkout whose `tools/probe_source_app.py` has `--touch-device` (`WL_MANIFEST`, branch
+  `oneplus-touch`, [manifest#71](https://github.com/a2hlab/manifest/pull/71)).
 
 Put the paths and the build directory names in `westlake/local.sh` (git-ignored); `config.sh` lists the
 variables. On WSL with the Windows `hdc.exe`, set `HDC_EXE` and `WL_HDC=westlake/tools/hdc-retry.sh`, which
-repeats calls that a dead WSL interop socket dropped (the probes fail on a lost call).
+repeats calls that a dead WSL interop socket dropped (the probes fail on a lost call). It follows
+westlake-harness `device/hdc_wsl.sh` and adds the repeat: here a socket that had just passed that script's check
+still failed the next call.
 
 ## Steps
 
@@ -57,15 +58,18 @@ which the phone does not have on its own (no SIM; Wi-Fi switches on and finds ne
 `v6.1.0.31-r2`, joining one is not tested yet), and the launch needs only the preload to pass.
 
 Keep the host app running between launches (`05` does): every host start gets a new window id, and the probe
-reads the id from the host's `window-state.json`. `05` stops the apps of earlier launches: killing appspawn-x
-leaves them running, and an earlier app's window stays above the new one.
+reads the id from the host's `window-state.json`. `05` stops the apps of earlier launches the way westlake-harness
+`device/config.sh` `kill_children` does (every process of the host's uid but the host, then appspawn-x): killing
+appspawn-x alone leaves them running, and an earlier app's window stays above the new one.
 
-## Touch positions
+## The app's window
 
-OH's classic window manager shows the app's full-screen frame (1080x2280) squeezed into the area between the
-status bar and the navigation bar (`[0, 108, 1080, 2064]` on screen), while the app lays itself out for the
-whole screen. touchfwd maps that area of the touchscreen onto the frame (`WL_TOUCH_AREA` in `config.sh`), so a
-finger lands where it touches. Without it, touches near the top and bottom edges land up to 108 px off, and
-the Clock's tabs do not respond. The area is a fixed setting: rotation, another bar size or a split screen
-needs its own. The fix that makes it automatic belongs in Westlake: lay the app out in the area OH shows it
-in, or give the app the bars as insets.
+On OH's classic window manager the activity's window is a sub-window of the host's. Before the fixes of
+westlake#175 it was created in the area between the status bar and the navigation bar and then switched to full
+screen; the window manager then reported it full screen, but its surface kept the smaller area (`[0, 108, 1080,
+2064]`), so the full-screen frame was shown squeezed and touches near the top and bottom landed up to 108 px off.
+Hiding OH's bars for the window only drew them empty: their windows stayed above the app and took the touches
+meant for its bottom tabs. Now the window is full screen from the start, OH's bars stay, and they reach the app
+as insets through the same code the SceneBoard path uses (`OhInsetsBridge.systemBars`, ADR-0008): the app lays
+itself out between them, and a touch lands where it is shown, with no setting per screen. (OH draws its bar icons
+white, so on a light app they do not show; the bars still work.)
