@@ -12,8 +12,10 @@ export LD_LIBRARY_PATH=$HOST_DIR/lib      # libtinfo.so.5 for the mingw clang (0
 export CCACHE_BASE CCACHE_MAXSIZE         # cache in $CCACHE_BASE/.ccache, not in $HOME
 # arkcompiler/taihe_ffi_gen builds its wheel with setuptools_scm, which takes the version from git. Synced at
 # the release tag, it parses "OpenHarmony-v7.0-Release" and stops (InvalidVersion 'v7.0-Release'). Give
-# that package its version (it only names the tool's wheel and version.txt).
-export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TAIHE=7.0.0
+# that package its version (it only names the tool's wheel and version.txt). The per-package
+# SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TAIHE is not honoured on that path; the few other setuptools_scm packages in the
+# tree (runtime_core's taihe copy, test runners) would hit the same tag and get the same version.
+export SETUPTOOLS_SCM_PRETEND_VERSION=7.0.0
 cd "$OH_ROOT"
 
 # --deps-guard false: the post-build dependency-policy check (deps_guard, Passthrough rules) fails for this product.
