@@ -1,0 +1,20 @@
+OH 7.0 hdcd: daemon_base.cpp includes os_account_manager.h unless HDC_NO_ACCOUNT, which is defined only
+without support_jsapi, while the os_account dependencies are added only with build_selinux. This product has
+SELinux off and JS APIs on, so the header is not found. Define HDC_NO_ACCOUNT whenever those dependencies are
+not added (GetUserId then answers the default user 100, the only user here).
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 6157bb2..4bd2a3b 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -110,7 +110,9 @@ template("hdcd_source_set") {
+       "MEMORY_POOL_ENABLE"
+     ]
+ 
+-    if (!support_jsapi) {
++    # The os_account dependencies below are added only with SELinux; without them daemon_base.cpp must not
++    # include os_account_manager.h either (it then uses the default user 100).
++    if (!(build_selinux && image_name == "system" && product_name != "ohos-sdk" && support_jsapi)) {
+       defines += [ "HDC_NO_ACCOUNT" ]
+     }
+ 
