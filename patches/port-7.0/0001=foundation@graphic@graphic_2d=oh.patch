@@ -1,0 +1,169 @@
+diff --git a/rosen/modules/render_service/core/feature/capture/rs_surface_capture_task_parallel.cpp b/rosen/modules/render_service/core/feature/capture/rs_surface_capture_task_parallel.cpp
+index b987c83..ea09430 100644
+--- a/rosen/modules/render_service/core/feature/capture/rs_surface_capture_task_parallel.cpp
++++ b/rosen/modules/render_service/core/feature/capture/rs_surface_capture_task_parallel.cpp
+@@ -162,7 +162,7 @@ void RSSurfaceCaptureTaskParallel::Capture(
+     }
+ 
+     std::function<void()> captureTask = [captureHandle, callback, captureParam]() -> void {
+-        RS_TRACE_NAME_FMT("RSSurfaceCaptureTaskParallel::TakeSurfaceCapture, NodeId: [%" PRIu64 "]", captureParam.id);
++        RS_TRACE_NAME_FMT("RSSurfaceCaptureTaskParallel::TakeSurfaceCapture, NodeId: [%{public}" PRIu64 "]", captureParam.id);
+         if (!captureHandle->Run(callback, captureParam)) {
+             callback->OnSurfaceCapture(captureParam.id, captureParam.config, nullptr);
+         }
+@@ -343,10 +343,10 @@ bool RSSurfaceCaptureTaskParallel::Run(
+     if (curNodeParams && curNodeParams->IsNodeToBeCaptured()) {
+         RSUifirstManager::Instance().AddCapturedNodes(curNodeParams->GetId());
+     }
+-    bool snapshotDmaEnabled = system::GetBoolParameter("rosen.snapshotDma.enabled", true);
++    // bool snapshotDmaEnabled = system::GetBoolParameter("rosen.snapshotDma.enabled", true);
+     bool isEnableFeature = GetFeatureParamValue("CaptureConfig",
+         &CaptureBaseParam::IsSnapshotWithDMAEnabled).value_or(false);
+-    if (snapshotDmaEnabled && isEnableFeature) {
++    if (isEnableFeature) {
+         auto copytask = CreateSurfaceSyncCopyTask(surface, std::move(pixelMap_),
+             nodeId_, captureConfig_, callback, finalRotationAngle_, false, errorCode_);
+         if (!copytask) {
+@@ -443,10 +443,10 @@ bool RSSurfaceCaptureTaskParallel::RunHDR(
+     }
+ #if (defined(RS_ENABLE_GL) || defined(RS_ENABLE_VK)) && \
+     (defined(RS_ENABLE_EGLIMAGE) && defined(RS_ENABLE_UNI_RENDER))
+-    bool snapshotDmaEnabled = system::GetBoolParameter("rosen.snapshotDma.enabled", true);
++    // bool snapshotDmaEnabled = system::GetBoolParameter("rosen.snapshotDma.enabled", true);
+     bool isEnableFeature = GetFeatureParamValue("CaptureConfig",
+         &CaptureBaseParam::IsSnapshotWithDMAEnabled).value_or(false);
+-    if (snapshotDmaEnabled && isEnableFeature) {
++    if (isEnableFeature) {
+         auto copytask = CreateSurfaceSyncCopyTaskWithDoublePixelMap(surface, std::move(pixelMap_),
+             surfaceHDR, std::move(pixelMapHDR_), nodeId_, captureConfig_, callback, finalRotationAngle_);
+         if (!copytask) {
+diff --git a/rosen/modules/render_service/core/feature/capture/rs_ui_capture_solo_task_parallel.cpp b/rosen/modules/render_service/core/feature/capture/rs_ui_capture_solo_task_parallel.cpp
+index f6003b6..7b3a633 100644
+--- a/rosen/modules/render_service/core/feature/capture/rs_ui_capture_solo_task_parallel.cpp
++++ b/rosen/modules/render_service/core/feature/capture/rs_ui_capture_solo_task_parallel.cpp
+@@ -218,10 +218,10 @@ bool RSUiCaptureSoloTaskParallel::Run()
+     RSUniRenderUtil::OptimizedFlushAndSubmit(surface, grContext, acquireFence,
+         GetFeatureParamValue("UICaptureConfig", &UICaptureParam::IsUseOptimizedFlushAndSubmitEnabled).value_or(false));
+     bufferGuard.SetAcquireFence(acquireFence);
+-    bool snapshotDmaEnabled = system::GetBoolParameter("rosen.snapshotDma.enabled", true);
++    // bool snapshotDmaEnabled = system::GetBoolParameter("rosen.snapshotDma.enabled", true);
+     bool isEnableFeature = GetFeatureParamValue("CaptureConfig",
+         &CaptureBaseParam::IsSnapshotWithDMAEnabled).value_or(false);
+-    if (snapshotDmaEnabled && isEnableFeature) {
++    if (isEnableFeature) {
+         auto copytask =
+             RSUiCaptureSoloTaskParallel::CreateSurfaceSyncCopyTask(
+                 surface, pixelMap_, nodeId_, captureConfig_);
+diff --git a/rosen/modules/render_service/core/feature/capture/rs_ui_capture_task_parallel.cpp b/rosen/modules/render_service/core/feature/capture/rs_ui_capture_task_parallel.cpp
+index 9e34d56..5b4f681 100644
+--- a/rosen/modules/render_service/core/feature/capture/rs_ui_capture_task_parallel.cpp
++++ b/rosen/modules/render_service/core/feature/capture/rs_ui_capture_task_parallel.cpp
+@@ -449,10 +449,10 @@ bool RSUiCaptureTaskParallel::Run(sptr<RSISurfaceCaptureCallback> callback, cons
+ #endif
+ #if (defined (RS_ENABLE_GL) || defined (RS_ENABLE_VK)) && (defined RS_ENABLE_EGLIMAGE)
+ #ifdef RS_ENABLE_UNI_RENDER
+-    bool snapshotDmaEnabled = system::GetBoolParameter("rosen.snapshotDma.enabled", true);
++    // bool snapshotDmaEnabled = system::GetBoolParameter("rosen.snapshotDma.enabled", true);
+     bool isEnableFeature = GetFeatureParamValue("CaptureConfig",
+         &CaptureBaseParam::IsSnapshotWithDMAEnabled).value_or(false);
+-    if (snapshotDmaEnabled && isEnableFeature) {
++    if (isEnableFeature) {
+         sptr<SyncFence> acquireFence = SyncFence::InvalidFence();
+         RSUniRenderUtil::OptimizedFlushAndSubmit(surface, grContext, acquireFence,
+             GetFeatureParamValue("UICaptureConfig",
+diff --git a/rosen/modules/render_service_base/src/drawable/rs_render_node_drawable_adapter.cpp b/rosen/modules/render_service_base/src/drawable/rs_render_node_drawable_adapter.cpp
+index 0e1537d..fc9f7dd 100755
+--- a/rosen/modules/render_service_base/src/drawable/rs_render_node_drawable_adapter.cpp
++++ b/rosen/modules/render_service_base/src/drawable/rs_render_node_drawable_adapter.cpp
+@@ -128,7 +128,7 @@ RSRenderNodeDrawableAdapter::SharedPtr RSRenderNodeDrawableAdapter::OnGenerate(
+     const auto it = GeneratorMap.find(node->GetType());
+     if (it == GeneratorMap.end()) {
+ #ifndef ROSEN_ARKUI_X
+-        ROSEN_LOGE("RSRenderNodeDrawableAdapter::OnGenerate, node type %{public}d is not supported", node->GetType());
++        ROSEN_LOGD("RSRenderNodeDrawableAdapter::OnGenerate, node type %{public}d is not supported", node->GetType());
+ #endif
+         return nullptr;
+     }
+diff --git a/rosen/modules/render_service_base/src/pipeline/rs_render_node.cpp b/rosen/modules/render_service_base/src/pipeline/rs_render_node.cpp
+index 5f67a0e..fd4cb91 100755
+--- a/rosen/modules/render_service_base/src/pipeline/rs_render_node.cpp
++++ b/rosen/modules/render_service_base/src/pipeline/rs_render_node.cpp
+@@ -4714,7 +4714,7 @@ void RSRenderNode::InitRenderParams()
+     DrawableV2::RSRenderNodeDrawableAdapter::OnGenerate(shared_from_this());
+     if (renderDrawable_ == nullptr) {
+ #ifndef ROSEN_ARKUI_X
+-        RS_LOGE("RSRenderNode::InitRenderParams failed");
++        RS_LOGD("RSRenderNode::InitRenderParams failed");
+ #endif
+         return;
+     }
+diff --git a/rosen/modules/render_service_base/src/pipeline/rs_surface_render_node.cpp b/rosen/modules/render_service_base/src/pipeline/rs_surface_render_node.cpp
+index afdc793..47c6220 100644
+--- a/rosen/modules/render_service_base/src/pipeline/rs_surface_render_node.cpp
++++ b/rosen/modules/render_service_base/src/pipeline/rs_surface_render_node.cpp
+@@ -2987,16 +2987,16 @@ void RSSurfaceRenderNode::SetIsOnTheTree(bool onTree, NodeId instanceRootNodeId,
+ #ifdef RS_MEMORY_INFO_MANAGER
+     RSMemoryInfoManager::SetSurfaceMemoryInfo(onTree, GetRSSurfaceHandler());
+ #endif
+-    if (GetSurfaceNodeType() == RSSurfaceNodeType::CURSOR_NODE) {
++    // if (GetSurfaceNodeType() == RSSurfaceNodeType::CURSOR_NODE) {
+         std::string uniqueIdStr = "null";
+ #ifndef ROSEN_CROSS_PLATFORM
+         uniqueIdStr = GetRSSurfaceHandler() != nullptr && GetRSSurfaceHandler()->GetConsumer() != nullptr ?
+                         std::to_string(GetRSSurfaceHandler()->GetConsumer()->GetUniqueId()) : "null";
+ #endif
+-        HILOG_COMM_INFO("RSSurfaceRenderNode:SetIsOnTheTree, node:[name: %{public}s, id: %{public}" PRIu64 "], "
++        HILOG_COMM_INFO("RSSurfaceRenderNode:SetIsOnTheTree test, node:[name: %{public}s, id: %{public}" PRIu64 "], "
+             "on tree: %{public}d, nodeType: %{public}d, uniqueId: %{public}s, screenNodeId: %{public}" PRIu64,
+             GetName().c_str(), GetId(), onTree, static_cast<int>(nodeType_), uniqueIdStr.c_str(), screenNodeId);
+-    }
++    // }
+ #ifdef ENABLE_FULL_SCREEN_RECONGNIZE
+     UpdateSurfaceNodeTreeStatusForAps(onTree);
+ #endif
+diff --git a/rosen/modules/render_service_base/src/render/rs_image_base.cpp b/rosen/modules/render_service_base/src/render/rs_image_base.cpp
+index be44036..2d1b83a 100644
+--- a/rosen/modules/render_service_base/src/render/rs_image_base.cpp
++++ b/rosen/modules/render_service_base/src/render/rs_image_base.cpp
+@@ -138,6 +138,11 @@ void RSImageBase::DrawImage(Drawing::Canvas& canvas, const Drawing::SamplingOpti
+     if (pixelMap_ && pixelMap_->GetAllocatorType() == Media::AllocatorType::DMA_ALLOC && !pixelMap_->IsAstc()) {
+         BindPixelMapToDrawingImage(canvas);
+     }
++#endif
++    // ASTC is a GPU compressed texture and can only be drawn through the compress-data path.
++    // SetCompressedDataForASTC()/UploadGpu() are both implemented for GL and VK, so the GL
++    // backend must take this path too, otherwise image_ stays null and nothing is drawn.
++#if defined(ROSEN_OHOS) && (defined(RS_ENABLE_GL) || defined(RS_ENABLE_VK))
+     if (pixelMap_ && pixelMap_->IsAstc()) {
+         SetCompressedDataForASTC();
+         UploadGpu(canvas);
+diff --git a/rosen/modules/render_service_base/src/transaction/rs_transaction_data.cpp b/rosen/modules/render_service_base/src/transaction/rs_transaction_data.cpp
+index 7413b43..26dca9f 100644
+--- a/rosen/modules/render_service_base/src/transaction/rs_transaction_data.cpp
++++ b/rosen/modules/render_service_base/src/transaction/rs_transaction_data.cpp
+@@ -450,6 +450,12 @@ bool RSTransactionData::UnmarshallingCommand(Parcel& parcel)
+ 
+ bool RSTransactionData::IsCallingPidValid(pid_t callingPid, const RSRenderNodeMap& nodeMap) const
+ {
++    // Since GetCallingPid interface always returns 0 in asynchronous binder in Linux kernel system,
++    // we temporarily add a white list to avoid abnormal functionality or abnormal display.
++    // The white list will be removed after GetCallingPid interface can return real PID.
++    if (callingPid == 0) {
++        return true;
++    }
+     std::unordered_map<pid_t, std::unordered_map<NodeId, std::set<
+         std::pair<uint16_t, uint16_t>>>> inaccessibleCommandMap;
+     std::unique_lock<std::mutex> lock(commandMutex_);
+diff --git a/rosen/modules/render_service_client/core/ui/rs_node.cpp b/rosen/modules/render_service_client/core/ui/rs_node.cpp
+index cbce849..309f74d 100755
+--- a/rosen/modules/render_service_client/core/ui/rs_node.cpp
++++ b/rosen/modules/render_service_client/core/ui/rs_node.cpp
+@@ -4117,7 +4117,7 @@ void RSNode::AddChildInner(SharedPtr child, int index)
+     }
+     if (child->GetType() == RSUINodeType::SURFACE_NODE) {
+         auto surfaceNode = RSBaseNode::ReinterpretCast<RSSurfaceNode>(child);
+-        ROSEN_LOGI("RSNode::AddChild, Id: %{public}" PRIu64 ", SurfaceNode:[Id: %{public}" PRIu64 ", name: %{public}s]",
++        ROSEN_LOGI("RSNode::AddChild (SURFACE_NODE), Id: %{public}" PRIu64 ", SurfaceNode:[Id: %{public}" PRIu64 ", name: %{public}s]",
+             id_, childId, surfaceNode->GetName().c_str());
+         RS_TRACE_NAME_FMT("RSNode::AddChild, Id: %" PRIu64 ", SurfaceNode:[Id: %" PRIu64 ", name: %s]",
+             id_, childId, surfaceNode->GetName().c_str());

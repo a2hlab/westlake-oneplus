@@ -1,0 +1,125 @@
+diff --git a/services/accountmgr/src/osaccount/inner_os_account_manager.cpp b/services/accountmgr/src/osaccount/inner_os_account_manager.cpp
+index 61faf7a..b090ed4 100644
+--- a/services/accountmgr/src/osaccount/inner_os_account_manager.cpp
++++ b/services/accountmgr/src/osaccount/inner_os_account_manager.cpp
+@@ -2904,6 +2904,25 @@ ErrCode IInnerOsAccountManager::ActivateOsAccount
+         return ERR_OSACCOUNT_SERVICE_INNER_ACCOUNT_OPERATING_ERROR;
+     }
+ 
++    /*
++     * 用 RAII 保证 operating 标记在所有退出路径上都被清理。
++     * 原实现依赖每个 return 之前手工调用 RemoveLocalIdToOperating()，PrepareActivateOsAccount()
++     * 的 ValidateDisplayForActivation() 失败分支就漏掉了这一步（多前台账户构建下可见）：
++     * 该标记会残留在 operatingId_（纯内存状态），使该账户之后的所有激活都返回
++     * "already in operating" 且无法自愈。
++     * 注意：本守卫只能覆盖函数正常返回的情况；若 SendMsgForAccountActivate() 内部本身永久阻塞
++     * （已由 os_account_interface.cpp 中等待 AMS 回调的超时兜底），析构不会执行。
++     */
++    struct OperatingGuard {
++        std::function<void()> cleanup;
++        ~OperatingGuard()
++        {
++            if (cleanup) {
++                cleanup();
++            }
++        }
++    } operatingGuard { [this, id]() { RemoveLocalIdToOperating(id); } };
++
+     // acquire the exclusive lock
+     std::lock_guard<std::mutex> lock(*GetOrInsertUpdateLock(id));
+ 
+@@ -2931,7 +2950,6 @@ ErrCode IInnerOsAccountManager::ActivateOsAccount
+ 
+     // main func to send message for account activation
+     errCode = SendMsgForAccountActivate(osAccountInfo, startStorage, displayId, isAppRecovery);
+-    RemoveLocalIdToOperating(id);
+     if (errCode != ERR_OK) {
+         return errCode;
+     }
+diff --git a/services/accountmgr/src/osaccount/os_account_interface.cpp b/services/accountmgr/src/osaccount/os_account_interface.cpp
+index bce1ce0..ab900b9 100644
+--- a/services/accountmgr/src/osaccount/os_account_interface.cpp
++++ b/services/accountmgr/src/osaccount/os_account_interface.cpp
+@@ -15,6 +15,7 @@
+ #include "os_account_interface.h"
+ 
+ #include <cerrno>
++#include <chrono>
+ #include <condition_variable>
+ #include <future>
+ #include <thread>
+@@ -78,6 +79,15 @@ constexpr int32_t MAX_GETBUNDLE_WAIT_TIMES = 10 * 1000 * 1000;
+ constexpr int32_t GET_MSG_FREQ = 100 * 1000;
+ constexpr int32_t DEAL_TIMES = MAX_GETBUNDLE_WAIT_TIMES / GET_MSG_FREQ;
+ constexpr int64_t MAX_BMS_UNLOCK_TIMES = 5 * 1000;
++
++/*
++ * Upper bound for waiting the AMS user callback (OnStartUserDone / OnStopUserDone / OnLogoutUserDone).
++ * The budget reuses BOOT_ACTIVATE_TIMEOUT, the deadline already declared for boot activation.
++ * Without this bound a callback that never arrives blocks the caller forever: AMS may stay busy
++ * resolving the highest priority ability (launcher) and never answer StartUser, so
++ * ActivateDefaultOsAccount never returns, the local account stays inactive, and no error is reported.
++ */
++constexpr int32_t WAIT_AMS_USER_CALLBACK_TIMEOUT_S = BOOT_ACTIVATE_TIMEOUT;
+ }
+ 
+ ErrCode InnerSendToAMSAccountStart(
+@@ -121,8 +131,16 @@ ErrCode OsAccountInterface::SendToAMSAccountStart(OsAccountInfo &osAccountInfo,
+         return code;
+     }
+     std::unique_lock<std::mutex> lock(osAccountStartUserCallback->mutex_);
+-    osAccountStartUserCallback->onStartCondition_.wait(
+-        lock, [osAccountStartUserCallback] { return osAccountStartUserCallback->isCalled_; });
++    if (!osAccountStartUserCallback->onStartCondition_.wait_for(lock,
++        std::chrono::seconds(WAIT_AMS_USER_CALLBACK_TIMEOUT_S), [osAccountStartUserCallback] {
++            return osAccountStartUserCallback->isCalled_;
++        })) {
++        FinishTraceAdapter();
++        ACCOUNT_LOGE("Timeout to wait for AMS start user callback, localId: %{public}d", localId);
++        ReportOsAccountOperationFail(localId, OPERATION_START, ERR_ACCOUNT_COMMON_OPERATION_TIMEOUT,
++            "Timeout to wait for AbilityManager StartUser callback");
++        return ERR_ACCOUNT_COMMON_OPERATION_TIMEOUT;
++    }
+     FinishTraceAdapter();
+     if (osAccountStartUserCallback->resultCode_ != ERR_OK) {
+         ACCOUNT_LOGE("Failed to AbilityManagerService in call back");
+@@ -173,9 +191,16 @@ ErrCode OsAccountInterface::SendToAMSAccountStop(OsAccountInfo &osAccountInfo)
+         return code;
+     }
+     std::unique_lock<std::mutex> lock(osAccountStopUserCallback->mutex_);
+-    osAccountStopUserCallback->onStopCondition_.wait(lock, [osAccountStopUserCallback] {
+-        return osAccountStopUserCallback->isCalled_;
+-    });
++    if (!osAccountStopUserCallback->onStopCondition_.wait_for(lock,
++        std::chrono::seconds(WAIT_AMS_USER_CALLBACK_TIMEOUT_S), [osAccountStopUserCallback] {
++            return osAccountStopUserCallback->isCalled_;
++        })) {
++        FinishTraceAdapter();
++        ACCOUNT_LOGE("Timeout to wait for AMS stop user callback, localId: %{public}d", localId);
++        ReportOsAccountOperationFail(localId, Constants::OPERATION_STOP, ERR_ACCOUNT_COMMON_OPERATION_TIMEOUT,
++            "Timeout to wait for AbilityManager StopUser callback");
++        return ERR_ACCOUNT_COMMON_OPERATION_TIMEOUT;
++    }
+     FinishTraceAdapter();
+     if (osAccountStopUserCallback->resultCode_ != ERR_OK) {
+         ACCOUNT_LOGE("Failed to AbilityManagerService in call back");
+@@ -226,9 +251,16 @@ ErrCode OsAccountInterface::SendToAMSAccountDeactivate(OsAccountInfo &osAccountI
+         return code;
+     }
+     std::unique_lock<std::mutex> lock(deactivateUserCallback->mutex_);
+-    deactivateUserCallback->onLogoutCondition_.wait(lock, [deactivateUserCallback] {
+-        return deactivateUserCallback->isCalled_;
+-    });
++    if (!deactivateUserCallback->onLogoutCondition_.wait_for(lock,
++        std::chrono::seconds(WAIT_AMS_USER_CALLBACK_TIMEOUT_S), [deactivateUserCallback] {
++            return deactivateUserCallback->isCalled_;
++        })) {
++        FinishTraceAdapter();
++        ACCOUNT_LOGE("Timeout to wait for AMS logout user callback, localId: %{public}d", localId);
++        ReportOsAccountOperationFail(localId, Constants::OPERATION_STOP, ERR_ACCOUNT_COMMON_OPERATION_TIMEOUT,
++            "Timeout to wait for AbilityManager LogoutUser callback");
++        return ERR_ACCOUNT_COMMON_OPERATION_TIMEOUT;
++    }
+     FinishTraceAdapter();
+     if (deactivateUserCallback->resultCode_ != ERR_OK) {
+         ACCOUNT_LOGE("Failed to logout user in call back");

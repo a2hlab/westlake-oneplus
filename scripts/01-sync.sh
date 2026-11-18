@@ -30,4 +30,5 @@ done
 step "git lfs pull"
 repo forall -c 'git lfs pull'
 
-"$SCRIPTS_DIR/verify-pins.sh"
+# The full pin list is for the tested release; SKIP_PIN_CHECK=1 for other OH tags (e.g. a 7.0 trial).
+[ "${SKIP_PIN_CHECK:-0}" = 1 ] || "$SCRIPTS_DIR/verify-pins.sh"

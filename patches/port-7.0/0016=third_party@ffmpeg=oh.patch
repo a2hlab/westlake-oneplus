@@ -1,0 +1,136 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index e7a2cdc..943fe10 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -52,6 +52,12 @@ libffmpeg_media_aarch64_sources = [
+   "//third_party/ffmpeg/libavcodec/aarch64/h264qpel_neon.S",
+   "//third_party/ffmpeg/libavcodec/aarch64/hpeldsp_init_aarch64.c",
+   "//third_party/ffmpeg/libavcodec/aarch64/hpeldsp_neon.S",
++  "//third_party/ffmpeg/libavcodec/aarch64/hevcdsp_init_aarch64.c",
++  "//third_party/ffmpeg/libavcodec/aarch64/hevcdsp_deblock_neon.S",
++  "//third_party/ffmpeg/libavcodec/aarch64/hevcdsp_idct_neon.S",
++  "//third_party/ffmpeg/libavcodec/aarch64/h26x/epel_neon.S",
++  "//third_party/ffmpeg/libavcodec/aarch64/h26x/qpel_neon.S",
++  "//third_party/ffmpeg/libavcodec/aarch64/h26x/sao_neon.S",
+   "//third_party/ffmpeg/libavcodec/aarch64/idctdsp_init_aarch64.c",
+   "//third_party/ffmpeg/libavcodec/aarch64/idctdsp_neon.S",
+   # "//third_party/ffmpeg/libavcodec/aarch64/mdct_neon.S",
+@@ -623,20 +629,24 @@ ohos_source_set("ffmpeg_dynamic") {
+     # "//third_party/ffmpeg/libavcodec/hapdec.c",
+     # "//third_party/ffmpeg/libavcodec/hapqa_extract_bsf.c",
+     # "//third_party/ffmpeg/libavcodec/hcom.c",
+-    # "//third_party/ffmpeg/libavcodec/hevc_cabac.c",
+-    # "//third_party/ffmpeg/libavcodec/hevc_data.c",
+-    # "//third_party/ffmpeg/libavcodec/hevc_filter.c",
+-    # "//third_party/ffmpeg/libavcodec/hevc_mp4toannexb_bsf.c",
+-
+-    # "//third_party/ffmpeg/libavcodec/hevc_mvs.c",
+-    # "//third_party/ffmpeg/libavcodec/hevc_parse.c",
+-    # "//third_party/ffmpeg/libavcodec/hevc_parser.c",
+-    # "//third_party/ffmpeg/libavcodec/hevc_ps.c",
+-    # "//third_party/ffmpeg/libavcodec/hevc_refs.c",
+-    # "//third_party/ffmpeg/libavcodec/hevc_sei.c",
+-    # "//third_party/ffmpeg/libavcodec/hevcdec.c",
+-    # "//third_party/ffmpeg/libavcodec/hevcdsp.c",
+-    # "//third_party/ffmpeg/libavcodec/hevcpred.c",
++    "//third_party/ffmpeg/libavcodec/hevc/cabac.c",
++    "//third_party/ffmpeg/libavcodec/hevc/data.c",
++    "//third_party/ffmpeg/libavcodec/hevc/dsp.c",
++    "//third_party/ffmpeg/libavcodec/hevc/filter.c",
++    "//third_party/ffmpeg/libavcodec/hevc/hevcdec.c",
++    "//third_party/ffmpeg/libavcodec/hevc/mvs.c",
++    "//third_party/ffmpeg/libavcodec/hevc/parse.c",
++    "//third_party/ffmpeg/libavcodec/hevc/parser.c",
++    "//third_party/ffmpeg/libavcodec/hevc/pred.c",
++    "//third_party/ffmpeg/libavcodec/hevc/ps.c",
++    "//third_party/ffmpeg/libavcodec/hevc/refs.c",
++    "//third_party/ffmpeg/libavcodec/hevc/sei.c",
++    "//third_party/ffmpeg/libavcodec/h265_profile_level.c",
++    "//third_party/ffmpeg/libavcodec/container_fifo.c",
++    "//third_party/ffmpeg/libavcodec/dovi_rpu.c",
++    "//third_party/ffmpeg/libavcodec/dovi_rpudec.c",
++    "//third_party/ffmpeg/libavcodec/dynamic_hdr_vivid.c",
++    "//third_party/ffmpeg/libavutil/hdr_dynamic_vivid_metadata.c",
+     # "//third_party/ffmpeg/libavcodec/hnm4video.c",
+     "//third_party/ffmpeg/libavcodec/hpeldsp.c",
+ 
+diff --git a/config_components.h b/config_components.h
+index a328401..2e1c431 100644
+--- a/config_components.h
++++ b/config_components.h
+@@ -861,11 +861,13 @@
+ #define CONFIG_H264_VULKAN_HWACCEL 0
+ #define CONFIG_HEVC_D3D11VA_HWACCEL 0
+ #define CONFIG_HEVC_D3D11VA2_HWACCEL 0
++#define CONFIG_HEVC_D3D12VA_HWACCEL 0
+ #define CONFIG_HEVC_DXVA2_HWACCEL 0
+ #define CONFIG_HEVC_NVDEC_HWACCEL 0
+ #define CONFIG_HEVC_VAAPI_HWACCEL 0
+ #define CONFIG_HEVC_VDPAU_HWACCEL 0
+ #define CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL 0
++#define CONFIG_HEVC_VULKAN_HWACCEL 0
+ #define CONFIG_MJPEG_NVDEC_HWACCEL 0
+ #define CONFIG_MJPEG_VAAPI_HWACCEL 0
+ #define CONFIG_MPEG1_NVDEC_HWACCEL 0
+diff --git a/libavcodec/hevc/hevcdec.c b/libavcodec/hevc/hevcdec.c
+index 6f0ae12..dfebf19 100644
+--- a/libavcodec/hevc/hevcdec.c
++++ b/libavcodec/hevc/hevcdec.c
+@@ -49,7 +49,7 @@
+ #include "hevcdec.h"
+ #include "hwaccel_internal.h"
+ #include "hwconfig.h"
+-#include "internal.h"
++#include "libavcodec/internal.h"
+ #include "profiles.h"
+ #include "progressframe.h"
+ #include "refstruct.h"
+diff --git a/ohos_config.sh b/ohos_config.sh
+index f7d7423..e595b97 100755
+--- a/ohos_config.sh
++++ b/ohos_config.sh
+@@ -55,14 +55,14 @@ FF_CONFIG_OPTIONS="
+     --disable-vulkan
+     --enable-demuxer=mp3,aac,ape,flac,ogg,wav,mov,mpegts,amr,amrnb,amrwb,matroska,flv,mpegps,asf,asf_o,srt,h264,webvtt,av3a,avi,mpegvideo,ac3,gsm,gsm_ms,amv,smjpeg,thp,xa,adx,dtk,afc,psxstr,dts,caf,aiff,au
+     --enable-muxer=mp4,h264,ipod,amr,mpegts,mp3,wav,flac,av3a,adts,ogg,flv
+-    --enable-parser=h263,h264,mpeg4video,vp8,vp9,mpegvideo,mjpeg
++    --enable-parser=h263,h264,hevc,mpeg4video,vp8,vp9,mpegvideo,mjpeg
+     --enable-parser=mpegaudio,aac,aac_latm,av3a,amr,opus,ac3,gsm,gsm_ms,ilbc,cook,dca,dvaudio
+-    --enable-decoder=h263,h264,mpeg2video,mpeg4,vp8,vp9,wmv3,msvideo1,mjpeg,cinepak,mpeg1video,dvvideo,rawvideo
++    --enable-decoder=h263,h264,hevc,mpeg2video,mpeg4,vp8,vp9,wmv3,msvideo1,mjpeg,cinepak,mpeg1video,dvvideo,rawvideo
+     --enable-decoder=mp2,mp3,mp3float,aac,aac_latm,ape,flac,vorbis,opus,amrnb,amrwb,ac3,gsm_ms,wmav1,wmav2,wmapro,adpcm_mtaf,adpcm_ima_wav,adpcm_ms,adpcm_ima_qt,adpcm_ima_dk3,adpcm_ima_dk4,adpcm_ima_ws,adpcm_ima_smjpeg,adpcm_ima_dat4,adpcm_ima_amv,adpcm_ima_apc,adpcm_ima_iss,adpcm_ima_oki,adpcm_ima_rad,adpcm_adx,adpcm_afc,adpcm_aica,adpcm_ct,adpcm_dtk,adpcm_g722,adpcm_g726,adpcm_g726le,adpcm_psx,adpcm_sbpro_2,adpcm_sbpro_3,adpcm_sbpro_4,adpcm_thp,adpcm_thp_le,adpcm_xa,adpcm_yamaha,gsm,alac,pcm_dvd,pcm_bluray,ilbc,twinvq,dvaudio,cook
+     --enable-decoder=png,bmp
+     --enable-encoder=aac,aac_latm,opus,flac
+     --enable-encoder=mpeg4,h263
+-    --enable-bsf=h264_mp4toannexb,extract_extradata
++    --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,extract_extradata
+     --enable-protocol=file
+     --enable-cross-compile
+     --enable-shared
+@@ -115,6 +115,8 @@ fi
+ 
+ FF_CONFIG_OPTIONS=`echo $FF_CONFIG_OPTIONS`
+ 
++mkdir -p ffbuild
++
+ ${FFMPEG_PATH}/configure ${FF_CONFIG_OPTIONS} --extra-cflags="${EXTRA_CFLAGS}" --extra-ldflags="${EXTRA_LDFLAGS}"
+ 
+ else
+@@ -165,14 +167,14 @@ FF_CONFIG_OPTIONS="
+     --disable-lzma
+     --enable-demuxer=mp3,aac,ape,flac,ogg,wav,mov,mpegts,amr,amrnb,amrwb,matroska,flv,mpegps,asf,asf_o,srt,h264,webvtt,av3a,avi,mpegvideo,ac3,gsm,gsm_ms,amv,smjpeg,thp,xa,adx,dtk,afc,psxstr,dts,caf,aiff,au
+     --enable-muxer=mp4,h264,ipod,amr,mpegts,mp3,wav,flac,av3a,adts,ogg,flv
+-    --enable-parser=h263,h264,mpeg4video,vp8,vp9,mpegvideo,mjpeg
++    --enable-parser=h263,h264,hevc,mpeg4video,vp8,vp9,mpegvideo,mjpeg
+     --enable-parser=mpegaudio,aac,aac_latm,av3a,amr,opus,ac3,gsm,gsm_ms,ilbc,cook,dca,dvaudio
+-    --enable-decoder=h263,h264,mpeg2video,mpeg4,vp8,vp9,wmv3,msvideo1,mjpeg,cinepak,mpeg1video,dvvideo,rawvideo
++    --enable-decoder=h263,h264,hevc,mpeg2video,mpeg4,vp8,vp9,wmv3,msvideo1,mjpeg,cinepak,mpeg1video,dvvideo,rawvideo
+     --enable-decoder=mp2,mp3,mp3float,aac,aac_latm,ape,flac,vorbis,opus,amrnb,amrwb,ac3,gsm_ms,wmav1,wmav2,wmapro,adpcm_mtaf,adpcm_ima_wav,adpcm_ms,adpcm_ima_qt,adpcm_ima_dk3,adpcm_ima_dk4,adpcm_ima_ws,adpcm_ima_smjpeg,adpcm_ima_dat4,adpcm_ima_amv,adpcm_ima_apc,adpcm_ima_iss,adpcm_ima_oki,adpcm_ima_rad,adpcm_adx,adpcm_afc,adpcm_aica,adpcm_ct,adpcm_dtk,adpcm_g722,adpcm_g726,adpcm_g726le,adpcm_psx,adpcm_sbpro_2,adpcm_sbpro_3,adpcm_sbpro_4,adpcm_thp,adpcm_thp_le,adpcm_xa,adpcm_yamaha,gsm,alac,pcm_dvd,pcm_bluray,ilbc,twinvq,dvaudio,cook
+     --enable-decoder=png,bmp
+     --enable-encoder=aac,aac_latm,opus,flac
+     --enable-encoder=mpeg4,h263
+-    --enable-bsf=h264_mp4toannexb,extract_extradata
++    --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,extract_extradata
+     --enable-protocol=file
+     --enable-lsp
+     --enable-filter=crop,transpose,vflip,hflip

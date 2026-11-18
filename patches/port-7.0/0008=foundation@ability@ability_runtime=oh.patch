@@ -1,0 +1,17 @@
+diff --git a/frameworks/native/appkit/app/main_thread.cpp b/frameworks/native/appkit/app/main_thread.cpp
+index 446917f..33ca11c 100644
+--- a/frameworks/native/appkit/app/main_thread.cpp
++++ b/frameworks/native/appkit/app/main_thread.cpp
+@@ -1789,9 +1789,9 @@ void MainThread::HandleLaunchApplication(const AppLaunchData &appLaunchData, con
+     }
+     application_->SetApplicationContext(applicationContext);
+ 
+-#ifdef SUPPORT_SCREEN
+-    OHOS::EglSetCacheDir(applicationContext->GetCacheDir());
+-#endif
++// #ifdef SUPPORT_SCREEN
++//     OHOS::EglSetCacheDir(applicationContext->GetCacheDir());
++// #endif
+ 
+     HspList hspList;
+     ErrCode ret = bundleMgrHelper->GetBaseSharedBundleInfos(appInfo.bundleName, hspList,

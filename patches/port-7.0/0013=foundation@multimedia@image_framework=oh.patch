@@ -1,0 +1,33 @@
+diff --git a/frameworks/innerkitsimpl/codec/src/image_source.cpp b/frameworks/innerkitsimpl/codec/src/image_source.cpp
+index 3a7ebee..e054b6e 100644
+--- a/frameworks/innerkitsimpl/codec/src/image_source.cpp
++++ b/frameworks/innerkitsimpl/codec/src/image_source.cpp
+@@ -4491,6 +4491,7 @@ unique_ptr<PixelMap> ImageSource::CreatePixelMapForASTC(uint32_t &errorCode, con
+     }
+     if (!GetImageInfoForASTC(info, sourceFilePtr)) {
+         IMAGE_LOGE("[ImageSource] get astc image info failed.");
++        errorCode = ERR_IMAGE_DECODE_HEAD_ABNORMAL;
+         return nullptr;
+     }
+     errorCode = pixelAstc->SetImageInfo(info);
+@@ -4508,6 +4509,7 @@ unique_ptr<PixelMap> ImageSource::CreatePixelMapForASTC(uint32_t &errorCode, con
+         ImageUtils::GetAstcBytesCount(info) : GetAstcSizeBytes(sourceFilePtr, fileSize);
+     if (astcSize == 0) {
+         IMAGE_LOGE("[ImageSource] astc GetAstcSizeBytes failed.");
++        errorCode = ERR_IMAGE_DECODE_HEAD_ABNORMAL;
+         return nullptr;
+     }
+ #else
+@@ -4515,10 +4517,12 @@ unique_ptr<PixelMap> ImageSource::CreatePixelMapForASTC(uint32_t &errorCode, con
+ #endif
+     if (!isSUT && astcSize > fileSize) {
+         IMAGE_LOGE("[ImageSource] astcSize > fileSize.");
++        errorCode = ERR_IMAGE_SOURCE_DATA_INCOMPLETE;
+         return nullptr;
+     }
+     if (!ReadFileAndResoveAstc(fileSize, astcSize, pixelAstc, sourceFilePtr, opts)) {
+         IMAGE_LOGE("[ImageSource] astc ReadFileAndResoveAstc failed.");
++        errorCode = ERR_IMAGE_MALLOC_ABNORMAL;
+         return nullptr;
+     }
+     pixelAstc->SetAstc(true);

@@ -1,0 +1,170 @@
+diff --git a/appexecfwk.gni b/appexecfwk.gni
+index ed4e25d..287a51d 100644
+--- a/appexecfwk.gni
++++ b/appexecfwk.gni
+@@ -53,7 +53,7 @@ declare_args() {
+   use_pre_bundle_profile = true
+   window_enable = true
+   dlp_permission_enable = true
+-  code_signature_enable = true
++  code_signature_enable = false
+   code_encryption_enable = true
+   verify_abc_enabled = true
+   check_eldir_enabled = true
+diff --git a/interfaces/kits/js/bundle_resource/bundle_resource.cpp b/interfaces/kits/js/bundle_resource/bundle_resource.cpp
+index ce0e016..862bf1c 100644
+--- a/interfaces/kits/js/bundle_resource/bundle_resource.cpp
++++ b/interfaces/kits/js/bundle_resource/bundle_resource.cpp
+@@ -330,6 +330,7 @@ napi_value GetAllBundleResourceInfo(napi_env env, napi_callback_info info)
+ 
+ void GetAllLauncherAbilityResourceInfoExec(napi_env env, void *data)
+ {
++    APP_LOGI("GetAllLauncherAbilityResourceInfoExec");
+     AllLauncherAbilityResourceInfoCallback *asyncCallbackInfo =
+         reinterpret_cast<AllLauncherAbilityResourceInfoCallback *>(data);
+     if (asyncCallbackInfo == nullptr) {
+@@ -354,6 +355,7 @@ void GetLauncherAbilityResourceInfoListExec(napi_env env, void *data)
+ 
+ void GetAllLauncherAbilityResourceInfoComplete(napi_env env, napi_status status, void *data)
+ {
++    APP_LOGI("GetAllLauncherAbilityResourceInfoComplete");
+     AllLauncherAbilityResourceInfoCallback *asyncCallbackInfo =
+         reinterpret_cast<AllLauncherAbilityResourceInfoCallback *>(data);
+     if (asyncCallbackInfo == nullptr) {
+@@ -398,7 +400,7 @@ void GetLauncherAbilityResourceInfoListComplete(napi_env env, napi_status status
+ 
+ napi_value GetAllLauncherAbilityResourceInfo(napi_env env, napi_callback_info info)
+ {
+-    APP_LOGD("NAPI start");
++    APP_LOGI("NAPI GetAllLauncherAbilityResourceInfo start");
+     NapiArg args(env, info);
+     if (!args.Init(ARGS_SIZE_ONE, ARGS_SIZE_TWO)) {
+         APP_LOGE("param count invalid");
+@@ -434,7 +436,7 @@ napi_value GetAllLauncherAbilityResourceInfo(napi_env env, napi_callback_info in
+         env, asyncCallbackInfo, GET_ALL_LAUNCHER_ABILITY_RESOURCE_INFO, GetAllLauncherAbilityResourceInfoExec,
+         GetAllLauncherAbilityResourceInfoComplete);
+     callbackPtr.release();
+-    APP_LOGD("NAPI end");
++    APP_LOGI("NAPI GetAllLauncherAbilityResourceInfo end");
+     return promise;
+ }
+ 
+diff --git a/services/bundlemgr/BUILD.gn b/services/bundlemgr/BUILD.gn
+index d1c3d37..905664c 100644
+--- a/services/bundlemgr/BUILD.gn
++++ b/services/bundlemgr/BUILD.gn
+@@ -672,9 +672,12 @@ ohos_shared_library("installs") {
+     "safwk:system_ability_fwk",
+     "samgr:samgr_proxy",
+     "selinux:libselinux",
+-    "selinux_adapter:librestorecon",
+     "storage_service:storage_manager_acl",
+   ]
++  if (build_selinux) {
++    external_deps += [ "selinux_adapter:librestorecon" ]
++    defines += [ "-DWITH_SELINUX" ]
++  }
+ 
+   if (code_signature_enable) {
+     external_deps += [
+diff --git a/services/bundlemgr/src/bundle_resource/bundle_resource_host_impl.cpp b/services/bundlemgr/src/bundle_resource/bundle_resource_host_impl.cpp
+index b438f46..bd7620c 100644
+--- a/services/bundlemgr/src/bundle_resource/bundle_resource_host_impl.cpp
++++ b/services/bundlemgr/src/bundle_resource/bundle_resource_host_impl.cpp
+@@ -242,12 +242,15 @@ ErrCode BundleResourceHostImpl::GetAllLauncherAbilityResourceInfo(const uint32_t
+         BundlePermissionMgr::AddPermissionUsedRecord(Constants::PERMISSION_GET_INSTALLED_BUNDLE_LIST, 0, 1);
+         return ERR_BUNDLE_MANAGER_INTERNAL_ERROR;
+     }
++    APP_LOGI("manager->GetAllLauncherAbilityResourceInfo start");
+     if (!manager->GetAllLauncherAbilityResourceInfo(flags, launcherAbilityResourceInfos)) {
+         APP_LOGE("get all resource failed, flags:%{public}u", flags);
+         BundlePermissionMgr::AddPermissionUsedRecord(Constants::PERMISSION_GET_INSTALLED_BUNDLE_LIST, 0, 1);
+         return ERR_BUNDLE_MANAGER_INTERNAL_ERROR;
+     }
++    APP_LOGI("manager->GetAllLauncherAbilityResourceInfo end");
+     auto bmsExtensionClient = std::make_shared<BmsExtensionClient>();
++    APP_LOGI("bmsExtensionClient->GetAllLauncherAbilityResourceInfo start");
+     ErrCode ret = bmsExtensionClient->GetAllLauncherAbilityResourceInfo(flags, launcherAbilityResourceInfos);
+     if (ret != ERR_OK) {
+         APP_LOGE("get all resource from ext failed, flags:%{public}u", flags);
+@@ -261,6 +264,7 @@ ErrCode BundleResourceHostImpl::GetAllLauncherAbilityResourceInfo(const uint32_t
+                 });
+         }
+     }
++    APP_LOGI("bmsExtensionClient->GetAllLauncherAbilityResourceInfo end");
+     manager->FilterLauncherAbilityResourceInfoWithFlag(flags, Constants::EMPTY_STRING, launcherAbilityResourceInfos);
+     // BOPD filter third party bundle resource
+     FilterThirdPartyIconInBopdMode(launcherAbilityResourceInfos);
+diff --git a/services/bundlemgr/src/installd/installd_host_impl.cpp b/services/bundlemgr/src/installd/installd_host_impl.cpp
+index a9c06d2..9cb7eeb 100644
+--- a/services/bundlemgr/src/installd/installd_host_impl.cpp
++++ b/services/bundlemgr/src/installd/installd_host_impl.cpp
+@@ -66,7 +66,9 @@
+ #include "ipc/verify_bin_param.h"
+ #include "parameters.h"
+ #include "inner_bundle_clone_common.h"
++#ifdef WITH_SELINUX
+ #include "policycoreutils.h"
++#endif // WITH_SELINUX
+ #include "storage_acl.h"
+ 
+ namespace OHOS {
+@@ -3473,11 +3475,12 @@ ErrCode InstalldHostImpl::RestoreconPath(const std::string &path, const std::str
+             bundleName.c_str(), path.c_str(), static_cast<int32_t>(scene));
+         return ERR_APPEXECFWK_INSTALLD_RESTORECON_PATH_FAILED;
+     }
+-
++#ifdef WITH_SELINUX
+     if (!InstalldOperator::RestoreconPath(path)) {
+         LOG_E(BMS_TAG_INSTALLD, "RestoreconPath failed");
+         return ERR_APPEXECFWK_INSTALLD_RESTORECON_PATH_FAILED;
+     }
++#endif // WITH_SELINUX
+     return ERR_OK;
+ }
+ 
+diff --git a/services/bundlemgr/src/installd/installd_operator.cpp b/services/bundlemgr/src/installd/installd_operator.cpp
+index 5dc3b6a..76902b0 100644
+--- a/services/bundlemgr/src/installd/installd_operator.cpp
++++ b/services/bundlemgr/src/installd/installd_operator.cpp
+@@ -61,7 +61,9 @@
+ #include "provision/provision_verify.h"
+ #include "securec.h"
+ #include "hnp_api.h"
++#ifdef WITH_SELINUX
+ #include "policycoreutils.h"
++#endif // WITH_SELINUX
+ #include "bundle_extractor.h"
+ #include "ipc/skills_package_param.h"
+ #include "inner_bundle_clone_common.h"
+@@ -2773,6 +2775,7 @@ bool InstalldOperator::CopyDriverSoFiles(const std::string &originalDir, const s
+         return false;
+     }
+     ChangeFileAttr(realDestinedDir, buf.st_uid, buf.st_gid);
++#ifdef WITH_SELINUX
+     // Refresh the selinux tag of the driver file so that it matches the selinux tag of the parent directory file
+     int ret = RestoreconFromParentDir(realDestinedDir.c_str());
+     if (ret != 0) {
+@@ -2780,6 +2783,7 @@ bool InstalldOperator::CopyDriverSoFiles(const std::string &originalDir, const s
+             ret);
+         return false;
+     }
++#endif // WITH_SELINUX
+     LOG_D(BMS_TAG_INSTALLD, "CopyDriverSoFiles end");
+     return true;
+ }
+@@ -3773,12 +3777,14 @@ bool InstalldOperator::WriteCertToFile(const std::string &certFilePath, const st
+ 
+ bool InstalldOperator::RestoreconPath(const std::string &path)
+ {
++#ifdef WITH_SELINUX
+     int ret = RestoreconRecurse(path.c_str());
+     if (ret == ERR_OK) {
+         LOG_I(BMS_TAG_INSTALLD, "RestoreconPath success");
+         return true;
+     }
+     LOG_E(BMS_TAG_INSTALLD, "RestoreconPath failed, ret: %{public}d", ret);
++#endif // WITH_SELINUX
+     return false;
+ }
+ 

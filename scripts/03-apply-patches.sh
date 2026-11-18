@@ -20,10 +20,12 @@ apply_one() {  # apply_one PROJECT_DIR PATCH
 }
 
 step "port patches (device/board/oneplus/fajita/patch)"
+# The port's patches are written for OH 6.1; patches/port-7.0 holds the ones rebased onto 7.0 (same file names).
 for p in device/board/oneplus/fajita/patch/*.patch; do
   # file name: NNNN=path@to@project=oh.patch  (as parsed by the port's init_patch.sh)
   b=$(basename "$p"); d=${b#*=}; d=${d%=*}; d=${d//@//}
-  apply_one "$d" "$OH_ROOT/$p"
+  if [ -f "$REPO_DIR/patches/port-7.0/$b" ]; then apply_one "$d" "$REPO_DIR/patches/port-7.0/$b"
+  else apply_one "$d" "$OH_ROOT/$p"; fi
 done
 
 step "westlake-oneplus OH patches"
