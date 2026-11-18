@@ -9,6 +9,37 @@ It builds OpenHarmony **6.1.0.31** (tag `OpenHarmony-v6.1-Release`, API 23) for 
 5.10.194 kernel. OH lives on **slot B only**. Android on slot A (and its data) stays as it is, and OH is
 RAM-booted from the PC (`fastboot boot`), so the boot partitions are never flashed.
 
+## OpenHarmony 7.0 (this branch, `oh-7.0`)
+
+This branch builds **OpenHarmony 7.0.0.38** (tag `OpenHarmony-v7.0-Release`) for the same phone. Verified on
+2026-11-18: built from a fresh sync on a 64-thread server; the images (slot B, same install and boot steps as
+6.1) boot to the lock screen and the home screen; swipes work; `check-oh.sh` passes (45 apps, launcher and
+SystemUI). Westlake on 7.0 is not tested yet (Westlake is built against 6.1).
+
+Settings in `scripts/local.sh`:
+
+```sh
+OH_MANIFEST_URL=https://gitcode.com/openharmony/manifest.git   # 7.0 is on gitcode, not gitee
+OH_TAG=OpenHarmony-v7.0-Release
+SKIP_PIN_CHECK=1        # the 6.1 pin list does not apply; manifests/oh70-full-pinned.xml has every 7.0 commit
+```
+
+What 7.0 needs on top of the 6.1 port:
+
+| | fix |
+|---|---|
+| port patches | 7 of the port's 18 OH patches rebased onto 7.0 (`patches/port-7.0`, used in place of the port's copies) |
+| product parts | `drivers_adapter` renamed `drivers_devhost`; `qrcodegen` replaced by `qrcode_generator`; `expat` and `vma` added (`patches/oh/vendor/oneplus`) |
+| board | the `alsa-utils` group target is gone; its five tools are listed by name |
+| prebuilts | declgen's npm postinstall clones TypeScript master from gitcode: pointed at the pinned in-tree copy (`02-prebuilts.sh`) |
+| SDK | the new Cortex-M lite NDK stub did not link (musl crt unwind tables) |
+| taihe | its wheel takes the version from git and cannot parse the release tag (`SETUPTOOLS_SCM_PRETEND_VERSION`) |
+| hdc, updater | two account/updater-mode switches were tied to SELinux, which this port turns off |
+| libnl | already pre-configured in 7.0; the 6.1 autoconf patch is dropped |
+
+gitcode's web firewall answered git clones with HTTP 418 on 2026-11-18 (after the sync for this branch
+finished), from two networks; a sync may have to wait for that to clear.
+
 ## Status (2026-11-17)
 
 | | |
