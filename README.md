@@ -11,20 +11,33 @@ RAM-booted from the PC (`fastboot boot`), so the boot partitions are never flash
 
 ## OpenHarmony 7.0 (this branch, `oh-7.0`)
 
-This branch builds **OpenHarmony 7.0.0.38** (tag `OpenHarmony-v7.0-Release`) for the same phone. Verified on
-2026-11-18: built from a fresh sync on a 64-thread server; the images (slot B, same install and boot steps as
-6.1) boot to the lock screen and the home screen; swipes work; `check-oh.sh` passes (45 apps, launcher and
-SystemUI). Westlake on 7.0 is not tested yet (Westlake is built against 6.1).
+This branch builds **OpenHarmony 7.0.0.38** (tag `OpenHarmony-v7.0-Release`) for the same phone, with
+**SceneBoard**, the window manager OpenHarmony and HarmonyOS phones use (the 6.1 branch runs OH's classic window
+manager). Verified on 2026-11-18: built on a 64-thread server; the images (slot B, same install and boot steps as
+6.1) boot in about 25 s to SceneBoard's lock screen; a swipe unlocks it to the home and app screens. Westlake on
+7.0 is not tested yet.
 
-Checked on the phone with 7.0:
+How SceneBoard is enabled (all in `patches/oh/vendor/oneplus`, as the 7.0 tree's own SceneBoard product
+`vendor/revoview/wukong100` does): `window_manager_use_sceneboard`, which makes `applications/standard/hap` install
+the prebuilt SceneBoard and its system apps; their preinstall entries; RenderService's uni-render. Three traps
+each kept the phone from showing anything:
+
+| symptom | cause |
+|---|---|
+| stays at the boot logo | the port's capability list names other signing fingerprints for `com.ohos.sceneboard` than the prebuilt's, so BMS refuses its privileged extensions and installs nothing; in SceneBoard mode the classic launcher and SystemUI are disabled, so no home screen starts |
+| black screen | RenderService in divided render (the port's default): SceneBoard's UI contexts get no task runner and attach nothing to the display |
+| lock screen or home screen frozen, phone reboots | SceneBoard's calls into `audio_server` block (no sound card); after 6 s OH kills and restarts SceneBoard, again and again. The board config stops `audio_server` at boot |
+
+Checked on the phone with 7.0 + SceneBoard:
 
 | | |
 |---|---|
-| lock screen, home screen, swipes and taps, Settings | yes |
-| Wi-Fi: Settings > WLAN switches on and lists the networks in range | yes (connecting not tested yet) |
+| SceneBoard lock screen, unlock, home and app screens | yes |
+| CPU frequency scaling (schedutil, up to 1.77 / 2.65 GHz) | yes: the board patch loads `icc_osm_l3`; without it the CPU frequency driver waited for it forever (6.1 too) |
+| Wi-Fi: Settings > WLAN switches on and lists the networks in range | yes on the classic-window-manager build of this branch; not rechecked with SceneBoard |
 | Bluetooth | no: the Bluetooth driver host needs a vendor `libbt_vendor.z.so`, which the port does not have |
-| audio | no: the kernel has no sound card (same kernel as 6.1) |
-| suspend | the kernel is kept out of it by the board's wake lock, as on 6.1, where it was checked; not booted on 7.0 yet |
+| audio | no: the sound card's driver waits for the audio DSP (`soc@0:sound` deferred); `audio_server` is stopped at boot |
+| suspend | the kernel is kept out of it by the board's wake lock (held after boot, no suspends) |
 | modem, camera, sensors | not checked yet |
 
 Settings in `scripts/local.sh`:
@@ -165,8 +178,8 @@ flash rewrite `system_b`/`vendor_b`.
 
 | Patch | Why |
 |---|---|
-| [`device/board/oneplus`](patches/oh/device/board/oneplus) | 5.10.194 modules; `/data` on tmpfs with the token setup redone after the mount (otherwise every native service has access token 0, samgr rejects them all and init panics the kernel); USB controller `a600000.dwc3` (the 6.6 name `a600000.usb` leaves hdc without USB); optional log dumper |
-| [`vendor/oneplus`](patches/oh/vendor/oneplus) | parts OH 6.1 needs in the fajita product config; drop two features 6.1 rejects; Wi-Fi as on rk3568 (nl80211 driver client, default chip HAL, chip driver service); no auto-suspend on screen timeout |
+| [`device/board/oneplus`](patches/oh/device/board/oneplus) | 5.10.194 modules; `/data` on tmpfs with the token setup redone after the mount (otherwise every native service has access token 0, samgr rejects them all and init panics the kernel); USB controller `a600000.dwc3` (the 6.6 name `a600000.usb` leaves hdc without USB); optional log dumper; the kernel wake lock `no_suspend`; `icc_osm_l3` so the CPU frequency driver probes; with SceneBoard, `audio_server` stopped at boot (no sound card) |
+| [`vendor/oneplus`](patches/oh/vendor/oneplus) | parts OH 6.1 needs in the fajita product config; drop two features 6.1 rejects; Wi-Fi as on rk3568 (nl80211 driver client, default chip HAL, chip driver service); no auto-suspend on screen timeout; SceneBoard as wukong100 (window manager feature, preinstall entries, the prebuilt's signing fingerprint, settings files) and RenderService uni-render |
 | [`foundation/communication/wifi`](patches/oh/foundation/communication/wifi) | scan results: the beacon P2P element was read past the end of the probe-response buffer (crashed the Wi-Fi service on 7.0) |
 | [`device/soc/qualcomm`](patches/oh/device/soc/qualcomm) | the display HDI libraries wait for the IDL headers they include (v1.1-v1.3); without it a clean build can fail with `'v1_2/display_composer_type.h' file not found` |
 | [`kernel/0001`](patches/kernel/0001-shmem-user-xattrs.patch) | `user.*` xattrs on tmpfs (upstream since 6.6): OH's databases set `user.security`; without it no app installs and the phone sits on the boot animation |
