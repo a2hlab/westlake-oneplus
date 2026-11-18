@@ -16,6 +16,16 @@ This branch builds **OpenHarmony 7.0.0.38** (tag `OpenHarmony-v7.0-Release`) for
 6.1) boot to the lock screen and the home screen; swipes work; `check-oh.sh` passes (45 apps, launcher and
 SystemUI). Westlake on 7.0 is not tested yet (Westlake is built against 6.1).
 
+Checked on the phone with 7.0:
+
+| | |
+|---|---|
+| lock screen, home screen, swipes and taps, Settings | yes |
+| Wi-Fi: Settings > WLAN switches on and lists the networks in range | yes (connecting not tested yet) |
+| Bluetooth | no: the Bluetooth driver host needs a vendor `libbt_vendor.z.so`, which the port does not have |
+| audio | no: the kernel has no sound card (same kernel as 6.1) |
+| modem, camera, sensors, suspend/resume | not checked yet |
+
 Settings in `scripts/local.sh`:
 
 ```sh
@@ -36,6 +46,7 @@ What 7.0 needs on top of the 6.1 port:
 | taihe | its wheel takes the version from git and cannot parse the release tag (`SETUPTOOLS_SCM_PRETEND_VERSION`) |
 | hdc, updater | two account/updater-mode switches were tied to SELinux, which this port turns off |
 | libnl | already pre-configured in 7.0; the 6.1 autoconf patch is dropped |
+| Wi-Fi | without the chip driver service, which the port never declared, 7.0's Wi-Fi service crashed at every start and took Settings with it: the nl80211 driver client, the default chip HAL and the chip service, as on rk3568 (`patches/oh/vendor/oneplus`); plus a scan-result read past the end of a buffer (`patches/oh/foundation/communication/wifi`) |
 
 gitcode's web firewall answered git clones with HTTP 418 on 2026-11-18 (after the sync for this branch
 finished), from two networks; a sync may have to wait for that to clear.
@@ -149,7 +160,8 @@ flash rewrite `system_b`/`vendor_b`.
 | Patch | Why |
 |---|---|
 | [`device/board/oneplus`](patches/oh/device/board/oneplus) | 5.10.194 modules; `/data` on tmpfs with the token setup redone after the mount (otherwise every native service has access token 0, samgr rejects them all and init panics the kernel); USB controller `a600000.dwc3` (the 6.6 name `a600000.usb` leaves hdc without USB); optional log dumper |
-| [`vendor/oneplus`](patches/oh/vendor/oneplus) | parts OH 6.1 needs in the fajita product config; drop two features 6.1 rejects; no auto-suspend on screen timeout |
+| [`vendor/oneplus`](patches/oh/vendor/oneplus) | parts OH 6.1 needs in the fajita product config; drop two features 6.1 rejects; Wi-Fi as on rk3568 (nl80211 driver client, default chip HAL, chip driver service); no auto-suspend on screen timeout |
+| [`foundation/communication/wifi`](patches/oh/foundation/communication/wifi) | scan results: the beacon P2P element was read past the end of the probe-response buffer (crashed the Wi-Fi service on 7.0) |
 | [`device/soc/qualcomm`](patches/oh/device/soc/qualcomm) | the display HDI libraries wait for the IDL headers they include (v1.1-v1.3); without it a clean build can fail with `'v1_2/display_composer_type.h' file not found` |
 | [`kernel/0001`](patches/kernel/0001-shmem-user-xattrs.patch) | `user.*` xattrs on tmpfs (upstream since 6.6): OH's databases set `user.security`; without it no app installs and the phone sits on the boot animation |
 | [`kernel/0002`, `0003`](patches/kernel) | OnePlus 6 msm-id/board-id in the DTB; ramoops without ECC (bring-up leftovers) |
