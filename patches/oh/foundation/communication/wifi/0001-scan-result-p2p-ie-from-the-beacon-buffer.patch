@@ -1,0 +1,22 @@
+Wi-Fi scan results: look for the P2P element in the beacon element buffer itself.
+
+GetScanResultText looked for a beacon P2P element at scanResult->ie + ieLen, for beaconIeLen bytes, as if the
+beacon elements followed the probe-response elements in one buffer (wpa_supplicant's wpa_scan_res layout).
+WifiScanResultExt has its own beaconIe buffer (WifiStaHalInterface fills ie and beaconIe from two vectors),
+so that read runs past the end of ie. It crashes wifi_manager_service (SIGSEGV in HdiBssGetVendorBeacon) when
+the driver reports beacon elements, as the nl80211 path does here, and the read crosses into an unmapped page.
+
+diff --git a/wifi/services/wifi_standard/wifi_framework/wifi_manage/wifi_native/client/hdi_client/hdi_interface/wifi_hdi_util.c b/wifi/services/wifi_standard/wifi_framework/wifi_manage/wifi_native/client/hdi_client/hdi_interface/wifi_hdi_util.c
+index 599ea0a..94771bc 100644
+--- a/wifi/services/wifi_standard/wifi_framework/wifi_manage/wifi_native/client/hdi_client/hdi_interface/wifi_hdi_util.c
++++ b/wifi/services/wifi_standard/wifi_framework/wifi_manage/wifi_native/client/hdi_client/hdi_interface/wifi_hdi_util.c
+@@ -1086,8 +1086,7 @@ int GetScanResultText(const struct WifiScanResultExt *scanResult,
+     mesh = HdiBssGetIe(scanResult->ie, scanResult->ieLen, HDI_EID_MESH_ID);
+     p2p = HdiBssGetVendorIe(scanResult->ie, scanResult->ieLen, HDI_P2P_IE_VENDOR_TYPE);
+     if (!p2p)
+-        p2p = HdiBssGetVendorBeacon(scanResult->ie, scanResult->ieLen,
+-            scanResult->beaconIeLen, HDI_P2P_IE_VENDOR_TYPE);
++        p2p = HdiBssGetVendorIe(scanResult->beaconIe, scanResult->beaconIeLen, HDI_P2P_IE_VENDOR_TYPE);
+     if (p2p && elems->ssidLen == HDI_P2P_CARD_SSID_LEN && 
+         memcmp(elems->ssid, HDI_P2P_CARD_SSID, HDI_P2P_CARD_SSID_LEN) == 0) {
+         return 0;
