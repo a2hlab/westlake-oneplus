@@ -20,7 +20,8 @@ RAM-booted from the PC (`fastboot boot`), so the boot partitions are never flash
 | Wi-Fi: Settings > WLAN switches on and lists the networks in range | yes, since release `v6.1.0.31-r2` (r1 predates the fix); joining a network not tested yet |
 | Bluetooth | no: the Bluetooth driver host needs a vendor `libbt_vendor.z.so`, which the port does not have |
 | audio | no: the kernel has no sound card |
-| modem, camera, sensors, suspend/resume | not checked yet |
+| suspend | no: the kernel's suspend (s2idle) drops USB, and the modem wakes it every few seconds while OH keeps suspending it again; see known limitations |
+| modem, camera, sensors | not checked yet |
 
 How this was verified (2026-11-17):
 - Applying the port's patches and ours to the pinned commits gives exactly the files of the tested tree (checked
@@ -48,7 +49,12 @@ Known limitations:
 - Avoid Android system updates while you use OH: A/B updates (e.g. LineageOS) install to the inactive slot B,
   which replaces OH and leaves Android on slot B, where `10-install.sh` will not install.
 - The device reports itself as "Oneplus 6T" / model "Fajita" (strings of the port it is based on).
-- Idle suspend is turned off (it disconnects USB and with it hdc); the power key still suspends.
+- Idle suspend is turned off (it disconnects USB and with it hdc), but the power key still suspends the kernel, and
+  then the phone loops: the modem (`1e40000.ipa`) wakes it every few seconds and OH suspends it again, hdc keeps
+  dropping and the screen does not stay on. Until the image holds a wake lock itself, take one after each boot:
+  `hdc shell "echo no_suspend > /sys/power/wake_lock"` (`westlake/03-prep.sh` does). The power key then only turns
+  the screen off and on. If the phone is already looping, hold the power key for 10-15 s and boot OH again
+  (`11-boot-oh.sh`).
 
 ## What you need
 

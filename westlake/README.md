@@ -47,7 +47,7 @@ still failed the next call.
 |---|---|---|
 | `01-phone-runtime.sh` | once per OH build | pulls the OH libraries Westlake links against, writes the firmware list with this phone's hashes, builds the GPU stand-in, makes `native-runtime-op6` |
 | `02-bridge.sh` | once per Westlake change | builds `liboh_adapter_bridge.so` with the classic-window-manager fix into `override-op6` |
-| `03-prep.sh` | after every boot | `sha256sum`/`chcon` on the phone, installs the host HAP |
+| `03-prep.sh` | after every boot | `sha256sum`/`chcon` on the phone, a kernel wake lock (no suspend: it drops USB here), installs the host HAP |
 | `04-framework.sh` | after every boot | stages the framework and checks that it initialises (~3 min) |
 | `05-launch.sh APP` | per app | launches the app; prints the window lines and saves a screenshot |
 | `tap.sh X Y` | tests | a tap through the touchscreen's input node at screen pixel X,Y, as a finger would |
@@ -73,3 +73,8 @@ meant for its bottom tabs. Now the window is full screen from the start, OH's ba
 as insets through the same code the SceneBoard path uses (`OhInsetsBridge.systemBars`, ADR-0008): the app lays
 itself out between them, and a touch lands where it is shown, with no setting per screen. (OH draws its bar icons
 white, so on a light app they do not show; the bars still work.)
+
+Dialogs: every app window, a dialog too, is such a sub-window, and each draws into a content node of its own that
+placement moves inside the display-sized OH window, as on SceneBoard. On the classic window manager that node is
+a render-service node; as the divided-render node it was before, a bounds update reached only one of the two
+copies RenderService kept, and Clock's add-timer dialog was stretched over the whole screen.
