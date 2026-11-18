@@ -4,8 +4,8 @@
 #   - the Westlake device tools call sha256sum and chcon, which this build's toybox lacks: a copy of
 #     /system/bin with an openssl-based sha256sum and a no-op chcon (SELinux is disabled here) is
 #     bind-mounted over /system/bin
-#   - holds a kernel wake lock: this kernel's suspend drops USB (hdc) and does not come back reliably
-#     (README.md, known limitations); the power key still turns the screen off and on
+#   - makes sure the kernel wake lock no_suspend is held: this kernel's suspend drops USB (hdc) and loops
+#     (README.md, known limitations). Images after release v6.1.0.31-r2 take it at boot (board init.fajita.cfg)
 #   - installs the Westlake host HAP ($WL_HOST)
 set -euo pipefail
 . "$(dirname "$0")/config.sh"
@@ -29,9 +29,14 @@ fi
 step "no kernel suspend"
 # OH's power key, and its sleep timer after the screen goes off, put the kernel in s2idle. Here that drops USB and loops:
 # the modem (1e40000.ipa) wakes the kernel every few seconds and OH suspends it again, so hdc keeps dropping and the
-# screen does not stay on. OH's suspend loop (power_host) blocks while a kernel wake lock is held.
-wl_hdc shell 'echo westlake_no_suspend > /sys/power/wake_lock; cat /sys/power/wake_lock' | tr -d '\r' | grep -q westlake_no_suspend \
-  && echo "  wake lock held" || die "could not take the wake lock"
+# screen does not stay on. OH's suspend loop (power_host) waits while a kernel wake lock is held. The same lock name as
+# the board's init.fajita.cfg: on images that take it at boot this changes nothing.
+if wl_hdc shell 'cat /sys/power/wake_lock' | tr -d '\r' | grep -qw no_suspend; then
+  echo "  already held (the image takes it at boot)"
+else
+  wl_hdc shell 'echo no_suspend > /sys/power/wake_lock; cat /sys/power/wake_lock' | tr -d '\r' | grep -qw no_suspend \
+    && echo "  wake lock held" || die "could not take the wake lock"
+fi
 
 step "host HAP $WL_HOST"
 hap=$(wl_build "$WL_HOST_HAP"); [ -f "$hap" ] || die "$hap missing"

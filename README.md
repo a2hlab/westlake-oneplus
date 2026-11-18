@@ -20,7 +20,7 @@ RAM-booted from the PC (`fastboot boot`), so the boot partitions are never flash
 | Wi-Fi: Settings > WLAN switches on and lists the networks in range | yes, since release `v6.1.0.31-r2` (r1 predates the fix); joining a network not tested yet |
 | Bluetooth | no: the Bluetooth driver host needs a vendor `libbt_vendor.z.so`, which the port does not have |
 | audio | no: the kernel has no sound card |
-| suspend | no: the kernel's suspend (s2idle) drops USB, and the modem wakes it every few seconds while OH keeps suspending it again; see known limitations |
+| power key: display off and on | yes, with the kernel kept out of suspend: its suspend (s2idle) drops USB and loops; built into images after `v6.1.0.31-r2`, a one-line step on r2 (known limitations) |
 | modem, camera, sensors | not checked yet |
 
 How this was verified (2026-11-17):
@@ -49,11 +49,13 @@ Known limitations:
 - Avoid Android system updates while you use OH: A/B updates (e.g. LineageOS) install to the inactive slot B,
   which replaces OH and leaves Android on slot B, where `10-install.sh` will not install.
 - The device reports itself as "Oneplus 6T" / model "Fajita" (strings of the port it is based on).
-- Idle suspend is turned off (it disconnects USB and with it hdc), but the power key still suspends the kernel, and
-  then the phone loops: the modem (`1e40000.ipa`) wakes it every few seconds and OH suspends it again, hdc keeps
-  dropping and the screen does not stay on. Until the image holds a wake lock itself, take one after each boot:
-  `hdc shell "echo no_suspend > /sys/power/wake_lock"` (`westlake/03-prep.sh` does). The power key then only turns
-  the screen off and on. If the phone is already looping, hold the power key for 10-15 s and boot OH again
+- The kernel never suspends. Its suspend (s2idle) disconnects USB, and with it hdc, and it loops: the modem
+  (`1e40000.ipa`) wakes the kernel every few seconds and OH suspends it again, so after the power key the screen did
+  not stay on. The board's `init.fajita.cfg` holds the kernel wake lock `no_suspend` from boot, which OH's suspend
+  loop (power_host) waits on; the power key still turns the display off and on, the screen timeout turns it off.
+  OH's suspend on screen timeout is turned off as well (vendor patch). The images of release `v6.1.0.31-r2` predate
+  the wake lock: on them, take it after each boot with `hdc shell "echo no_suspend > /sys/power/wake_lock"`
+  (`westlake/03-prep.sh` does). If the phone is already looping, hold the power key for 10-15 s and boot OH again
   (`11-boot-oh.sh`).
 
 ## What you need

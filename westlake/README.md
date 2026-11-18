@@ -48,7 +48,7 @@ still failed the next call.
 |---|---|---|
 | `01-phone-runtime.sh` | once per OH build | pulls the OH libraries Westlake links against, writes the firmware list with this phone's hashes, builds the GPU stand-in, makes `native-runtime-op6` |
 | `02-bridge.sh` | once per Westlake change | builds `liboh_adapter_bridge.so` with the classic-window-manager fix into `override-op6` |
-| `03-prep.sh` | after every boot | `sha256sum`/`chcon` on the phone, a kernel wake lock (no suspend: it drops USB here), installs the host HAP |
+| `03-prep.sh` | after every boot | `sha256sum`/`chcon` on the phone, the kernel wake lock `no_suspend` if the image did not take it (suspend drops USB here), installs the host HAP |
 | `04-framework.sh` | after every boot | stages the framework and checks that it initialises (~3 min) |
 | `05-launch.sh APP` | per app | launches the app; prints the window lines and saves a screenshot |
 | `tap.sh X Y` | tests | a tap through the touchscreen's input node at screen pixel X,Y, as a finger would |

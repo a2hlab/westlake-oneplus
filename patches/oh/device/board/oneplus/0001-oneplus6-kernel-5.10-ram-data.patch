@@ -4,6 +4,10 @@ Run the OnePlus 6T (fajita) board config on a OnePlus 6 (enchilada) with the 5.1
 - init.fajita.cfg: the system init.cfg creates /data/service/el0/* and runs load_access_token_id BEFORE this vendor
   pre-init job, i.e. on the read-only root; redo that on the tmpfs, otherwise every native service gets token 0
   (samgr: AddSystemAbilityInner PERMISSION DENIED) and init panics the kernel
+- init.fajita.cfg: hold the kernel wake lock no_suspend. This kernel's suspend (s2idle) drops USB, and with it hdc,
+  and it loops: the modem (1e40000.ipa, no SIM) wakes the kernel every few seconds and OH suspends it again, so after
+  the power key the screen did not stay on. OH's suspend loop (power_host) waits while a wake lock is held; the power
+  key still turns the display off and on
 - init.fajita.usb.cfg: the dwc3 controller is a600000.dwc3 on 5.10 (a600000.usb is the 6.6 name); hdc needs it
 - logdump.sh + service: optional boot-log channel (only with op6.logdump=1 on the kernel command line)
 
@@ -45,7 +49,7 @@ index 10e290a..2e575d0 100755
  /dev/block/sda3              /misc      none     none  wait,required
 \ No newline at end of file
 diff --git a/fajita/cfg/init.fajita.cfg b/fajita/cfg/init.fajita.cfg
-index a9ef35c..f2a34ed 100755
+index a9ef35c..66f0550 100755
 --- a/fajita/cfg/init.fajita.cfg
 +++ b/fajita/cfg/init.fajita.cfg
 @@ -5,6 +5,16 @@
@@ -65,7 +69,15 @@ index a9ef35c..f2a34ed 100755
                  "export LIBGL_DRIVERS_PATH /vendor/lib64/chipsetsdk",
                  "exec /system/bin/sh /vendor/etc/init.insmod.sh",
                  "write /proc/sys/vm/min_free_kbytes 10240",
-@@ -63,5 +73,15 @@
+@@ -25,6 +35,7 @@
+                 "write /sys/kernel/hungtask/monitorlist whitelist,init,appspawn",
+                 "write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor conservative",
+                 "write /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor conservative",
++                "write /sys/power/wake_lock no_suspend",
+                 "chown system system /sys/kernel/hungtask/userlist"
+             ]
+         }, {
+@@ -63,5 +74,15 @@
                  "chmod 0777 /sys/class/backlight/ae94000.dsi.0/max_brightness"
              ]
          }

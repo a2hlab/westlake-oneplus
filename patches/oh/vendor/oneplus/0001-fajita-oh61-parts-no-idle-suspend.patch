@@ -5,7 +5,8 @@ OH 6.1 product config for fajita (the port's vendor repo has no 6.1 branch):
   driver service (wifi_chip_device in device_info.hcs). Without the chip feature switch the Wi-Fi service needs
   chip_interface_service, and the wlan client without nl80211 has no kernel driver to talk to (ath10k is cfg80211)
 - power_suspend.json: no auto-suspend on screen timeout. Suspend makes dwc3 disconnect, which drops hdc
-  (the port's USB_NOTES.md issue B1, route 1). The power key still suspends.
+  (the port's USB_NOTES.md issue B1, route 1). The power key still asks for suspend; the board's wake lock
+  (patches/oh/device/board/oneplus) keeps the kernel out of it.
 
 diff --git a/fajita/config.json b/fajita/config.json
 index ddd18b3..9db5333 100755

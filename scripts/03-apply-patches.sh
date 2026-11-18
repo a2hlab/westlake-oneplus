@@ -15,7 +15,7 @@ apply_one() {  # apply_one PROJECT_DIR PATCH
     echo "  applied:         ${p#$REPO_DIR/} -> $dir"
   else
     git -C "$dir" apply --check --whitespace=nowarn "$p" || true
-    die "$p does not apply to $dir"
+    die "$p does not apply to $dir (an older version of it applied? git -C $dir stash -u, then run this script and the ones after it again)"
   fi
 }
 
