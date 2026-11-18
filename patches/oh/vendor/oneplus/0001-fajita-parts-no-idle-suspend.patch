@@ -9,7 +9,8 @@ Product config for fajita on OH 7.0 (the port's vendor repo has no 6.1 or 7.0 br
   chip_interface_service; 7.0's WifiTogglerManager gives up when it is missing and the service crashes at start
   (null WifiControllerMachine in ScanOnlyToggled), and Settings with it (isWiFiActive throws)
 - power_suspend.json: no auto-suspend on screen timeout. Suspend makes dwc3 disconnect, which drops hdc
-  (the port's USB_NOTES.md issue B1, route 1). The power key still suspends.
+  (the port's USB_NOTES.md issue B1, route 1). The power key still asks for suspend; the board's wake lock
+  (patches/oh/device/board/oneplus) keeps the kernel out of it.
 
 diff --git a/fajita/config.json b/fajita/config.json
 index ddd18b3..4a908c6 100755

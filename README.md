@@ -24,7 +24,8 @@ Checked on the phone with 7.0:
 | Wi-Fi: Settings > WLAN switches on and lists the networks in range | yes (connecting not tested yet) |
 | Bluetooth | no: the Bluetooth driver host needs a vendor `libbt_vendor.z.so`, which the port does not have |
 | audio | no: the kernel has no sound card (same kernel as 6.1) |
-| modem, camera, sensors, suspend/resume | not checked yet |
+| suspend | the kernel is kept out of it by the board's wake lock, as on 6.1, where it was checked; not booted on 7.0 yet |
+| modem, camera, sensors | not checked yet |
 
 Settings in `scripts/local.sh`:
 
@@ -87,7 +88,12 @@ Known limitations:
 - Avoid Android system updates while you use OH: A/B updates (e.g. LineageOS) install to the inactive slot B,
   which replaces OH and leaves Android on slot B, where `10-install.sh` will not install.
 - The device reports itself as "Oneplus 6T" / model "Fajita" (strings of the port it is based on).
-- Idle suspend is turned off (it disconnects USB and with it hdc); the power key still suspends.
+- The kernel never suspends. Its suspend (s2idle) disconnects USB, and with it hdc, and it loops (seen on 6.1, same
+  kernel): the modem (`1e40000.ipa`) wakes the kernel every few seconds and OH suspends it again, so after the power
+  key the screen did not stay on. The board's `init.fajita.cfg` holds the kernel wake lock `no_suspend` from boot,
+  which OH's suspend loop (power_host) waits on; the power key still turns the display off and on. OH's suspend on
+  screen timeout is turned off as well (vendor patch). Images built before this change lack the wake lock: on them,
+  take it after each boot with `hdc shell "echo no_suspend > /sys/power/wake_lock"`.
 
 ## What you need
 
