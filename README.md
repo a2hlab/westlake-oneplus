@@ -9,7 +9,7 @@ It builds OpenHarmony **6.1.0.31** (tag `OpenHarmony-v6.1-Release`, API 23) for 
 5.10.194 kernel. OH lives on **slot B only**. Android on slot A (and its data) stays as it is, and OH is
 RAM-booted from the PC (`fastboot boot`), so the boot partitions are never flashed.
 
-## Status (2026-11-17)
+## Status (2026-11-18)
 
 | | |
 |---|---|
@@ -17,7 +17,10 @@ RAM-booted from the PC (`fastboot boot`), so the boot partitions are never flash
 | Display (DRM/KMS composer, Mesa freedreno on the Adreno 630) | yes |
 | `hdc` over USB (shell, file transfer, screenshots, `reboot bootloader`) | yes |
 | `bootevent.boot.completed`, 45 system apps installed, launcher + SystemUI running | yes |
-| Wi-Fi, Bluetooth, audio, modem, camera, sensors, suspend/resume | not checked yet |
+| Wi-Fi: Settings > WLAN switches on and lists the networks in range | yes, with images built from this repository since 2026-11-18 (the `v6.1.0.31-r1` release images predate the fix); joining a network not tested yet |
+| Bluetooth | no: the Bluetooth driver host needs a vendor `libbt_vendor.z.so`, which the port does not have |
+| audio | no: the kernel has no sound card |
+| modem, camera, sensors, suspend/resume | not checked yet |
 
 How this was verified (2026-11-17):
 - Applying the port's patches and ours to the pinned commits gives exactly the files of the tested tree (checked
@@ -122,7 +125,8 @@ flash rewrite `system_b`/`vendor_b`.
 | Patch | Why |
 |---|---|
 | [`device/board/oneplus`](patches/oh/device/board/oneplus) | 5.10.194 modules; `/data` on tmpfs with the token setup redone after the mount (otherwise every native service has access token 0, samgr rejects them all and init panics the kernel); USB controller `a600000.dwc3` (the 6.6 name `a600000.usb` leaves hdc without USB); optional log dumper |
-| [`vendor/oneplus`](patches/oh/vendor/oneplus) | parts OH 6.1 needs in the fajita product config; drop two features 6.1 rejects; no auto-suspend on screen timeout |
+| [`vendor/oneplus`](patches/oh/vendor/oneplus) | parts OH 6.1 needs in the fajita product config; drop two features 6.1 rejects; Wi-Fi as on rk3568 (nl80211 driver client, default chip HAL, chip driver service); no auto-suspend on screen timeout |
+| [`foundation/communication/wifi`](patches/oh/foundation/communication/wifi) | scan results: the beacon P2P element was read past the end of the probe-response buffer (crashed the Wi-Fi service on 7.0) |
 | [`device/soc/qualcomm`](patches/oh/device/soc/qualcomm) | the display HDI libraries wait for the IDL headers they include (v1.1-v1.3); without it a clean build can fail with `'v1_2/display_composer_type.h' file not found` |
 | [`kernel/0001`](patches/kernel/0001-shmem-user-xattrs.patch) | `user.*` xattrs on tmpfs (upstream since 6.6): OH's databases set `user.security`; without it no app installs and the phone sits on the boot animation |
 | [`kernel/0002`, `0003`](patches/kernel) | OnePlus 6 msm-id/board-id in the DTB; ramoops without ECC (bring-up leftovers) |
