@@ -1,0 +1,17 @@
+OH 7.0 toybox id.c defines static oh_getpwuid() but never calls it; with -Wall -Werror (and no
+-Wno-unused-function in toybox's cflags) the build stops. Mark it unused.
+
+diff --git a/toys/posix/id.c b/toys/posix/id.c
+index 6f7a98e..aa95c4f 100644
+--- a/toys/posix/id.c
++++ b/toys/posix/id.c
+@@ -101,7 +101,8 @@ static void do_id_init()
+   oh_getpwuid_r_func = (oh_getpwuid_r_)dlsym(dlopen_handle, "oh_getpwuid_r");
+ }
+ 
+-static struct passwd *oh_getpwuid(uid_t uid)
++// Not called in this file (oh_xgetpwuid is): unused, which -Wall -Werror rejects.
++static __attribute__((unused)) struct passwd *oh_getpwuid(uid_t uid)
+ {
+   struct passwd *pw = getpwuid(uid);
+   if (pw) return pw;
