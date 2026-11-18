@@ -1,0 +1,24 @@
+OH 7.0's SDK build adds a lite NDK for Cortex-M (sysroot_lite). Its libc.so stub links musl's cortex_m crt
+objects with -nostdlib and no unwinder, but soft_musl_crt compiles them with -funwind-tables
+-fasynchronous-unwind-tables (from the configs), so crtn.o (merged with crtplus.c) references the ARM EHABI
+personality __aeabi_unwind_cpp_pr0 and the link fails. Build the cortex_m crt objects without unwind tables.
+
+diff --git a/musl_template.gni b/musl_template.gni
+index 2bfa76f..e52ec1a 100644
+--- a/musl_template.gni
++++ b/musl_template.gni
+@@ -688,6 +688,14 @@ template("musl_libs") {
+         "-mmark-bti-property",
+       ]
+     }
++    if (musl_arch == "cortex_m") {
++      # The SDK's lite NDK links these crt objects with -nostdlib and no unwinder (sysroot_lite libc.so);
++      # ARM EHABI unwind tables would reference __aeabi_unwind_cpp_pr0. cflags_c comes after the configs' flags.
++      cflags_c += [
++        "-fno-unwind-tables",
++        "-fno-asynchronous-unwind-tables",
++      ]
++    }
+ 
+     deps = porting_deps
+ 
