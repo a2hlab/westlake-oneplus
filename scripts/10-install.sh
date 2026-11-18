@@ -3,6 +3,7 @@
 # are not touched). Run it with the phone booted into Android from slot A with root adb (`adb root` works).
 #   1. saves boot_a/b, dtbo_a/b, vbmeta_a/b to $BACKUP_DIR
 #   2. writes system.img -> system_b (sda14) and vendor.img -> vendor_b (sde44) with dd from Android, verifies them
+#      (a partition whose content already matches its image is left as it is)
 #   3. in fastboot: erases dtbo_b and makes slot B active (then run 11-boot-oh.sh)
 # Re-run after every rebuild. fastboot.exe on Windows runs out of memory on the 2.5 GB system image, and
 # hand-made sparse images were accepted but not written, which is why the images go through adb.
@@ -39,13 +40,15 @@ done
 (cd "$BACKUP_DIR" && sha256sum ./*.img > SHA256SUMS)
 
 write_part() {  # write_part IMAGE BLOCKDEV
-  local img=$1 blk=$2 n bs=4194304
+  local img=$1 blk=$2 n bs=4194304 want have
   n=$(stat -c %s "$img"); [ $((n % bs)) = 0 ] || bs=4096
+  want=$(sha256sum < "$img" | cut -d' ' -f1)
+  have=$(sh_ "dd if=$blk bs=$bs count=$((n / bs)) 2>/dev/null | sha256sum" | cut -d' ' -f1)
+  # A partition that already holds the image is not rewritten (e.g. system_b after a vendor-only rebuild).
+  [ "$want" = "$have" ] && { echo "  $(basename "$img"): $blk already holds it (sha256 $want)"; return 0; }
   echo "  $(basename "$img") -> $blk ($n bytes)"
   "$ADB" ${SERIAL:+-s "$SERIAL"} exec-in "dd of=$blk bs=$bs" < "$img"
   sh_ sync
-  local want have
-  want=$(sha256sum < "$img" | cut -d' ' -f1)
   have=$(sh_ "dd if=$blk bs=$bs count=$((n / bs)) 2>/dev/null | sha256sum" | cut -d' ' -f1)
   [ "$want" = "$have" ] || die "verify failed for $blk ($have != $want)"
   echo "    verified sha256 $want"
