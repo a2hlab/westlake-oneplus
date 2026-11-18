@@ -1,8 +1,8 @@
 # westlake-oneplus
 
 OpenHarmony 6.1 on the **OnePlus 6** (`enchilada`, SDM845): everything needed to build the same images we run and
-put them on a phone, as the base for running [Westlake](https://github.com/a2hlab/westlake) (Android apps on
-OpenHarmony) on OnePlus hardware.
+put them on a phone (or to install the [prebuilt images](#install-without-building)), as the base for running
+[Westlake](https://github.com/a2hlab/westlake) (Android apps on OpenHarmony) on OnePlus hardware.
 
 It builds OpenHarmony **6.1.0.31** (tag `OpenHarmony-v6.1-Release`, API 23) for the community OnePlus 6T port
 ([gitee.com/ohos_port](https://gitee.com/ohos_port), product `fajita`) and adapts it to the OnePlus 6 with a
@@ -47,15 +47,31 @@ Known limitations:
 
 - A OnePlus 6 with an **unlocked bootloader**, running Android from **slot A** with **root adb** (`adb root`
   works, e.g. LineageOS with rooted debugging). The install writes slot B from that Android.
-- A build host: x86_64 Linux (Ubuntu 22.04 or 24.04, also a minimal `ubuntu:24.04` container; WSL2 works) with
-  **~300 GB** free disk and about **2 GB of RAM per build job** (`JOBS`, default 6: fits in 24 GB; 64 jobs ran
-  in 138 GB). A finished build uses about 200 GB (88 GB sources, 96 GB `out/`, 17 GB ccache; the ccache can grow
-  to 100 GB over rebuilds). A full build takes about 2 hours with 64 jobs on a 72-thread server, and over
-  8 hours with 6 jobs on a 16-core laptop.
+- To build the images yourself, a build host: x86_64 Linux (Ubuntu 22.04 or 24.04, also a minimal `ubuntu:24.04`
+  container; WSL2 works) with **~300 GB** free disk and about **2 GB of RAM per build job** (`JOBS`, default 6:
+  fits in 24 GB; 64 jobs ran in 138 GB). A finished build uses about 200 GB (88 GB sources, 96 GB `out/`, 17 GB
+  ccache; the ccache can grow to 100 GB over rebuilds). A full build takes about 2 hours with 64 jobs on a
+  72-thread server, and over 8 hours with 6 jobs on a 16-core laptop.
 - `adb` and `fastboot` (Android platform-tools) and `hdc` (from an OpenHarmony SDK, `toolchains/hdc`).
   On WSL with the Windows tools, point `ADB`, `FASTBOOT` and `HDC` at the `.exe` files: the scripts hand them
   `\\wsl.localhost\...` paths, so images stay on the Linux disk. Windows also needs a driver for the phone's
   fastboot mode: [`scripts/windows/install-fastboot-driver.ps1`](scripts/windows/install-fastboot-driver.ps1).
+
+## Install without building
+
+Each [release](https://github.com/a2hlab/westlake-oneplus/releases) has the images built from this repository:
+`system.img` and `vendor.img` (zstd-compressed), `boot-oneplus6.img` and `SHA256SUMS`. No build host is needed,
+only the phone and tools above plus `curl`, `zstd` and `sha256sum`:
+
+```sh
+git clone https://github.com/a2hlab/westlake-oneplus && cd westlake-oneplus
+scripts/09-get-images.sh    # latest release -> ~/oh61-oneplus6/prebuilt: download, check, unpack
+export IMAGES_DIR=~/oh61-oneplus6/prebuilt BOOT_IMG=~/oh61-oneplus6/prebuilt/boot-oneplus6.img
+scripts/10-install.sh && scripts/11-boot-oh.sh && scripts/check-oh.sh
+```
+
+`RELEASE_TAG=<tag>` picks another release. The rest (booting again, going back to Android, undoing the
+install) is the same as for self-built images, see [Install and boot](#install-and-boot).
 
 ## Build
 
