@@ -1,0 +1,32 @@
+OH 7.0 flashd (hdc in the updater image) defines UPDATER_MODE only with SELinux. Without it, hdc's shell.cpp and
+daemon_unity.cpp call HdcDaemonBase::CheckBundlePath (daemon_base.cpp, not part of flashd) and the updater does
+not link on a product without SELinux. Define UPDATER_MODE always; SELinux code stays under SURPPORT_SELINUX.
+
+diff --git a/services/flashd/BUILD.gn b/services/flashd/BUILD.gn
+index b264fd9..209902d 100644
+--- a/services/flashd/BUILD.gn
++++ b/services/flashd/BUILD.gn
+@@ -99,6 +99,11 @@ ohos_static_library("flashd_deamon") {
+   defines = [
+     "HARMONY_PROJECT",
+     "OPENSSL_SUPPRESS_DEPRECATED",
++
++    # flashd is hdc in the updater: without UPDATER_MODE its shell/unity code calls
++    # HdcDaemonBase::CheckBundlePath (daemon_base.cpp, not built here), which a product without SELinux
++    # then fails to link. UPDATER_MODE code uses no SELinux (that is SURPPORT_SELINUX).
++    "UPDATER_MODE",
+   ]
+ 
+   configs = [ ":flashd_hdc_config" ]
+@@ -139,10 +144,7 @@ ohos_static_library("flashd_deamon") {
+ 
+   if (build_selinux) {
+     external_deps += [ "selinux:libselinux_static" ]
+-    defines += [
+-      "SURPPORT_SELINUX",
+-      "UPDATER_MODE",
+-    ]
++    defines += [ "SURPPORT_SELINUX" ]
+   }
+ 
+   if (build_variant == "user") {
