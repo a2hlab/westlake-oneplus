@@ -2,12 +2,14 @@
 # Build Westlake's window/ability bridge (liboh_adapter_bridge.so) from $WL_WESTLAKE, which must carry the
 # classic-window-manager fix: this OH build has no SceneBoard, so the bridge creates windows through the
 # legacy IWindowManager, where the activity's sub-window needs the host window as parent and no OH window
-# animation. Writes $WL_OUT/override-op6: a copy of $WL_OVERRIDE with this bridge.
+# animation, OH's bars reach the app as insets, and each window (a dialog too) draws into a content node that
+# is a render-service node. Writes $WL_OUT/override-op6: a copy of $WL_OVERRIDE with this bridge.
 set -euo pipefail
 . "$(dirname "$0")/config.sh"
 wl_need WL_SC WL_WESTLAKE WL_OVERRIDE WL_NATIVE_RUNTIME
 grep -q 'legacy SUB_WINDOW parent' "$WL_WESTLAKE/framework/window/jni/oh_window_manager_client.cpp" \
   && grep -q 'wl_legacyHostSub' "$WL_WESTLAKE/framework/window/jni/oh_window_manager_client.cpp" \
+  && grep -qF 'isWindow=*/sceneProxy_ == nullptr' "$WL_WESTLAKE/framework/window/jni/oh_window_manager_client.cpp" \
   || die "$WL_WESTLAKE lacks the classic-window-manager fixes (see westlake/README.md)"
 ws=$WL_SC/workspace; b=$WL_OUT/bridge; rm -rf "$b"; mkdir -p "$b"
 cd "$WL_WESTLAKE"

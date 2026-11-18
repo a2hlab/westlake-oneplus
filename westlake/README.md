@@ -30,7 +30,8 @@ OH transition that never plays (alpha 0, scale 0).
 - a Westlake source-closure directory (`WL_SC`) with Westlake's builds: the framework, boot image, resources,
   core libraries, ART and native runtime, appspawn, a runtime-library override, the bionic shim, the WebView
   input, the signed host HAP and a prepared app input (Westlake's build chain makes them);
-- a westlake checkout with the classic-window-manager fixes and touchfwd's first-touch fix (`WL_WESTLAKE`,
+- a westlake checkout with the classic-window-manager fixes (full-screen window with OH's bars as insets, dialogs at
+  their own size) and touchfwd's first-touch fix (`WL_WESTLAKE`,
   branch `oneplus-classic-wms`, [westlake#175](https://github.com/a2hlab/westlake/pull/175));
 - a manifest checkout whose `tools/probe_source_app.py` has `--touch-device` (`WL_MANIFEST`, branch
   `oneplus-touch`, [manifest#71](https://github.com/a2hlab/manifest/pull/71)).
