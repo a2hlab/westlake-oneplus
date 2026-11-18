@@ -4,11 +4,15 @@ Product config for fajita on OH 7.0 (the port's vendor repo has no 6.1 or 7.0 br
 - 7.0 renames: the HDF device host is drivers_devhost (6.1: drivers_adapter); no qrcodegen (7.0 has
   qrcode_generator, which productdefine/common/inherit/rich.json already lists)
 - drop init_feature_loader (unknown since 6.1) and wifi_feature_with_hdi_chip_supported=false (HalDeviceManager build error)
+- Wi-Fi as on rk3568: the nl80211 wlan driver client, the default chip HAL (libwifi_hal_default) and the chip
+  driver service (wifi_chip_device in device_info.hcs). Without the chip feature switch the Wi-Fi service needs
+  chip_interface_service; 7.0's WifiTogglerManager gives up when it is missing and the service crashes at start
+  (null WifiControllerMachine in ScanOnlyToggled), and Settings with it (isWiFiActive throws)
 - power_suspend.json: no auto-suspend on screen timeout. Suspend makes dwc3 disconnect, which drops hdc
   (the port's USB_NOTES.md issue B1, route 1). The power key still suspends.
 
 diff --git a/fajita/config.json b/fajita/config.json
-index ddd18b3..87bffa1 100755
+index ddd18b3..4a908c6 100755
 --- a/fajita/config.json
 +++ b/fajita/config.json
 @@ -12,7 +12,10 @@
@@ -48,7 +52,20 @@ index ddd18b3..87bffa1 100755
          }
        ]
      },
-@@ -131,15 +150,14 @@
+@@ -113,8 +132,10 @@
+         {
+           "component": "drivers_peripheral_wlan",
+           "features": [
+-            "drivers_peripheral_wlan_feature_enable_HDF_NL80211 = false",
+-            "drivers_peripheral_wlan_feature_enable_HDF_UT = false"
++            "drivers_peripheral_wlan_feature_enable_HDF_NL80211 = true",
++            "drivers_peripheral_wlan_feature_enable_HDF_UT = false",
++            "drivers_peripheral_wlan_feature_vendor = default",
++            "drivers_peripheral_wlan_p2p_name = p2p-dev-wlan0"
+           ]
+         },
+         {
+@@ -131,15 +152,14 @@
          {
            "component": "init",
            "features": [
@@ -67,7 +84,7 @@ index ddd18b3..87bffa1 100755
          {
            "component": "mindspore",
            "features": []
-@@ -165,9 +183,8 @@
+@@ -165,9 +185,8 @@
            "features": [
              "wifi_feature_non_seperate_p2p = true",
              "wifi_feature_non_hdf_driver = true",
@@ -79,7 +96,7 @@ index ddd18b3..87bffa1 100755
          }
        ]
      },
-@@ -181,6 +198,14 @@
+@@ -181,6 +200,14 @@
              "audio_framework_feature_opensl_es = true",
              "audio_framework_feature_support_os_account = false"
            ]
@@ -94,7 +111,7 @@ index ddd18b3..87bffa1 100755
          }
        ]
      },
-@@ -211,6 +236,66 @@
+@@ -211,6 +238,66 @@
            "features": [
              "wpa_supplicant_driver_nl80211 = true"
            ]
@@ -161,7 +178,7 @@ index ddd18b3..87bffa1 100755
          }
        ]
      },
-@@ -259,11 +344,19 @@
+@@ -259,11 +346,19 @@
          {
            "component": "vulkan-headers",
            "features": []
@@ -182,7 +199,7 @@ index ddd18b3..87bffa1 100755
        "components": [
          {
            "component": "hiview",
-@@ -273,6 +366,55 @@
+@@ -273,6 +368,55 @@
            ]
          }
        ]
@@ -251,3 +268,22 @@ index 48d75d7..724963c 100644
          "delayMs": 0
      },
      "lid": {
+diff --git a/fajita/hdf_config/uhdf/device_info.hcs b/fajita/hdf_config/uhdf/device_info.hcs
+index 503d175..ef1817a 100644
+--- a/fajita/hdf_config/uhdf/device_info.hcs
++++ b/fajita/hdf_config/uhdf/device_info.hcs
+@@ -181,6 +181,14 @@
+                     serviceName = "wlan_interface_service";
+                 }
+             }
++            wifi_chip_device :: device {
++                device0 :: deviceNode {
++                    policy = 2;
++                    priority = 100;
++                    moduleName = "libchip_hdi_driver.z.so";
++                    serviceName = "chip_interface_service";
++                }
++            }
+         }
+         wpa :: host {
+             hostName = "wpa_host";
