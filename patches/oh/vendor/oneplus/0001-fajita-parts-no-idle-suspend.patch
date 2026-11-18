@@ -1,11 +1,13 @@
-OH 6.1 product config for fajita (the port's vendor repo has no 6.1 branch):
-- add the parts OH 6.1 requires that the 5.1 config lacks (rust_libc, skia, notofonts, alsa-lib, ... as in rk3568)
-- drop init_feature_loader (unknown in 6.1) and wifi_feature_with_hdi_chip_supported=false (HalDeviceManager build error)
+Product config for fajita on OH 7.0 (the port's vendor repo has no 6.1 or 7.0 branch):
+- add the parts OH 6.1+ requires that the 5.1 config lacks (rust_libc, skia, notofonts, alsa-lib, ... as in rk3568)
+- 7.0 renames: the HDF device host is drivers_devhost (6.1: drivers_adapter); no qrcodegen (7.0 has
+  qrcode_generator, which productdefine/common/inherit/rich.json already lists)
+- drop init_feature_loader (unknown since 6.1) and wifi_feature_with_hdi_chip_supported=false (HalDeviceManager build error)
 - power_suspend.json: no auto-suspend on screen timeout. Suspend makes dwc3 disconnect, which drops hdc
   (the port's USB_NOTES.md issue B1, route 1). The power key still suspends.
 
 diff --git a/fajita/config.json b/fajita/config.json
-index ddd18b3..1064010 100755
+index ddd18b3..dbf7682 100755
 --- a/fajita/config.json
 +++ b/fajita/config.json
 @@ -12,7 +12,10 @@
@@ -40,7 +42,7 @@ index ddd18b3..1064010 100755
 +          "features": []
 +        },
 +        {
-+          "component": "drivers_adapter",
++          "component": "drivers_devhost",
 +          "features": []
          }
        ]
@@ -91,7 +93,7 @@ index ddd18b3..1064010 100755
          }
        ]
      },
-@@ -211,6 +236,62 @@
+@@ -211,6 +236,58 @@
            "features": [
              "wpa_supplicant_driver_nl80211 = true"
            ]
@@ -114,10 +116,6 @@ index ddd18b3..1064010 100755
 +        },
 +        {
 +          "component": "tex-hyphen",
-+          "features": []
-+        },
-+        {
-+          "component": "qrcodegen",
 +          "features": []
 +        },
 +        {
@@ -154,7 +152,7 @@ index ddd18b3..1064010 100755
          }
        ]
      },
-@@ -259,11 +340,19 @@
+@@ -259,11 +336,19 @@
          {
            "component": "vulkan-headers",
            "features": []
@@ -175,7 +173,7 @@ index ddd18b3..1064010 100755
        "components": [
          {
            "component": "hiview",
-@@ -273,6 +362,55 @@
+@@ -273,6 +358,55 @@
            ]
          }
        ]
