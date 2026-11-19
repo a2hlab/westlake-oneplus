@@ -152,6 +152,10 @@ bring-up record: every failure, how it showed and what fixed it.
 - `BOOT_CMDLINE_EXTRA=op6.logdump=1 scripts/06-make-boot.sh` makes OH write its kernel log, process list and
   crash dumps every 4 s to the unused end of `system_b`. After a hang, force-restart (Power ~10 s; the phone
   falls back to Android) and run `scripts/read-logdump.sh`. ramoops does not survive a reboot on this phone.
+- A phone that hangs or panics under OH waits in Qualcomm crash-dump mode (USB `05c6:900e`, `QUSB_BULK` on Windows)
+  until it is restarted, with its RAM intact: `scripts/crashdump.py console DIR` reads the kernel's console log from
+  the ramoops area there, and `scripts/crashdump.py reset` restarts the phone without touching it (under WSL, give
+  the device to Linux with usbipd-win first; see the script).
 - `hdc shell reboot bootloader` takes a running OH back to fastboot.
 
 ## Layout
