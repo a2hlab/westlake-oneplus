@@ -3,7 +3,8 @@
 # boot-oneplus6-camera.img, see docs/camera.md). Every hdc call goes through scripts/config.sh (hdc_ = hdc -t
 # <the phone>).
 #   host-camera-test.sh push              copy modules, tools and phone scripts to /data/local/tmp/cam
-#   host-camera-test.sh load [SENSOR]     load the modules (all sensors, or one), show dmesg + device nodes
+#   host-camera-test.sh load [SENSOR]     load the modules (all sensors, or one), show dmesg + device nodes;
+#                                         CAMSS_ARGS=enable_gcc_axi=1 in the environment passes module parameters
 #   host-camera-test.sh graph             print the media graph (media-ctl -p)
 #   host-camera-test.sh capture SENSOR [FRAMES] [TESTPATTERN]
 #                                         capture (tpg | imx376 | imx371 | imx519), pull the frames, make PNGs;
@@ -30,7 +31,7 @@ push)
 	sh_ "chmod 755 $R/media-ctl $R/yavta; cd $R && sha256sum *.ko media-ctl yavta cam-*.sh"
 	echo "--- expected:"; (cd "$A" && sha256sum *.ko media-ctl yavta cam-*.sh)
 	;;
-load)    sh_ "cd $R && sh cam-load.sh ${2:-}" ;;
+load)    sh_ "cd $R && CAMSS_ARGS='${CAMSS_ARGS:-}' sh cam-load.sh ${2:-}" ;;
 graph)   sh_ "$R/media-ctl -d \$(for m in /dev/media*; do $R/media-ctl -d \$m -p 2>/dev/null | grep -q qcom-camss && echo \$m; done | head -1) -p" ;;
 dmesg)   sh_ "dmesg | grep -i -E 'camss|cci|imx|lc898|csiphy|csid|vfe|smmu|gdsc' | tail -80" ;;
 shell)   shift; sh_ "$*" ;;

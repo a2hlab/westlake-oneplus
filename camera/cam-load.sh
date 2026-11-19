@@ -3,14 +3,15 @@
 # Run as root from the directory that holds the new .ko files (default /data/local/tmp/cam).
 #   sh cam-load.sh            all sensors
 #   sh cam-load.sh imx376     CAMSS + this sensor only (imx371 | imx376 | imx519)
+#   CAMSS_ARGS=enable_gcc_axi=1 sh cam-load.sh    module parameters for qcom-camss
 D=${CAM_DIR:-/data/local/tmp/cam}
 SYS=/system/lib/modules/$(uname -r)/kernel
 only=$1
 
-ins() {  # ins FILE: insmod, quiet if already loaded
+ins() {  # ins FILE [PARAMS]: insmod, quiet if already loaded
 	n=$(basename "$1" .ko | sed 's/-/_/g')
 	if grep -q "^$n " /proc/modules; then echo "  loaded   $n"; return 0; fi
-	if insmod "$1"; then echo "  insmod   $n"; else echo "  FAILED   $n ($1)"; return 1; fi
+	if insmod "$@"; then echo "  insmod   $n $2"; else echo "  FAILED   $n ($1)"; return 1; fi
 }
 
 echo "kernel $(uname -r), camss in DT: $(ls -d /sys/firmware/devicetree/base/soc@0/camss@acb3000 2>/dev/null || echo NO)"
@@ -23,7 +24,7 @@ ins $SYS/drivers/media/common/videobuf2/videobuf2-dma-sg.ko
 grep -q '^camcc_sdm845 ' /proc/modules || ins $SYS/drivers/clk/qcom/camcc-sdm845.ko
 echo "== new modules from $D"
 ins $D/v4l2-cci.ko
-ins $D/qcom-camss.ko || exit 1
+ins $D/qcom-camss.ko $CAMSS_ARGS || exit 1
 sleep 1
 for s in imx376 imx371 imx519; do
 	[ -n "$only" ] && [ "$only" != "$s" ] && continue
