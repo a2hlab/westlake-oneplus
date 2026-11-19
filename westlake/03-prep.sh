@@ -18,9 +18,11 @@ if wl_hdc shell 'sha256sum /system/bin/sh' | tr -d '\r' | grep -qE '^[0-9a-f]{64
 else
   wl_hdc file send "$(wl_tool_path "$t/sha256sum.sh")" /data/local/tmp/wl-sha256sum >/dev/null
   wl_hdc file send "$(wl_tool_path "$t/chcon.sh")" /data/local/tmp/wl-chcon >/dev/null
+  # chcon: the no-op stand-in only where SELinux is off (images built with build_selinux have a real chcon)
   wl_hdc shell 'O=/data/local/tmp/wl-sysbin; rm -rf $O && cp -a /system/bin $O &&
-    rm -f $O/sha256sum $O/chcon && cp /data/local/tmp/wl-sha256sum $O/sha256sum && cp /data/local/tmp/wl-chcon $O/chcon &&
-    chmod 755 $O/sha256sum $O/chcon && [ "$(ls $O | wc -l)" = "$(ls /system/bin | wc -l)" ] &&
+    rm -f $O/sha256sum && cp /data/local/tmp/wl-sha256sum $O/sha256sum && chmod 755 $O/sha256sum &&
+    { [ -e /sys/fs/selinux/enforce ] && [ -e /system/bin/chcon ] || { rm -f $O/chcon && cp /data/local/tmp/wl-chcon $O/chcon && chmod 755 $O/chcon; }; } &&
+    [ "$(ls $O | wc -l)" = "$(ls /system/bin | wc -l)" ] &&
     mount --bind $O /system/bin && echo "  bind mount OK"' | tr -d '\r'
   wl_hdc shell 'sha256sum /system/bin/sh' | tr -d '\r' | grep -qE '^[0-9a-f]{64}  /system/bin/sh$' \
     || die "sha256sum still missing on the phone"

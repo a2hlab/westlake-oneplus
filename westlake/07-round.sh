@@ -14,7 +14,8 @@
 #   LOCALE (en-US)                   the locale apps get, as on Westlake's test board, whose language is English;
 #                                    empty: the phone's own (the image's default is Chinese)
 # Exit 3: /data stayed below MIN_FREE_MB; exit 4: the phone stopped answering, lost its framework stage (a reboot
-# empties the RAM disk: 03-prep.sh and 04-framework.sh again) or its network. Run it again to resume.
+# empties a RAM disk: 03-prep.sh and 04-framework.sh again; 03-prep.sh is needed after every boot) or its network.
+# Run it again to resume.
 #
 # Per app: stage it (the harness's device/prep_apps.py: unpack, verify signatures, pin, prepare; the next app is
 # staged while this one runs), make, sign and install its OH bundle, launch it, wait, then take its log, screenshot,
@@ -22,7 +23,9 @@
 # its bundle. Every app gets a line in logs/TAG/results.tsv; apps with one are skipped, so running the round again
 # resumes it (RETRY=1 launches the failed ones again).
 #
-# The phone's /data is a RAM disk: one app at a time, and nothing of it stays. The framework is hard-linked into
+# The phone's /data is a RAM disk unless it has its own partition (westlake-oneplus oh-7.0 scripts/14-data-partition.sh;
+# then the framework stage and the input cache stay across reboots, and so does the Wi-Fi login): one app at a time,
+# and nothing of an app stays. The framework is hard-linked into
 # each app's bundle (a copy would take ~480 MB of RAM per app; the launcher copies it because the kernel links
 # only within one encryption policy, but a RAM disk has none), so are the files every app shares (the WebView,
 # runtime libraries and guests, ~325 MB: the launcher's --input-cache-link, sent once into
@@ -268,7 +271,7 @@ d = json.load(open(sys.argv[1])); print(d.get("child", ""), d.get("parent", ""),
     dev "cat /data/local/tmp/ev-$C.maps 2>/dev/null" > "$ev.maps"; dev "cat /data/local/tmp/ev-$C.hilog 2>/dev/null" > "$ev.hilog"
     dev "grep '^\[AppSpawnX\]' $S/parent.log 2>/dev/null" > "$ev.spawner"
     for f in "$ev.maps" "$ev.hilog" "$ev.spawner" "$ev.faultlogs" "$ev.cppcrash"; do
-      [ -n "$(tr -d '[:space:]' < "$f" 2>/dev/null | head -c 1)" ] || rm -f "$f"; done
+      [ -n "$(tr -d '[:space:]' 2>/dev/null < "$f" | head -c 1)" ] || rm -f "$f"; done
     result "$pkg" launched "child=$C ${left:-waited ${WAIT}s} relayouts=$(grep -c OH_WSA-relayout "$ev.stderr") \
 launch=$((t_launched - t_probe))s turn=$(( $(date +%s) - t_app ))s"
   fi
