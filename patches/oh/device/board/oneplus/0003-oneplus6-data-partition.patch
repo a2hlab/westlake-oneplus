@@ -1,0 +1,89 @@
+/data on a partition of its own when the phone has one, else the 4 GB RAM disk as before:
+- mount-data.sh (vendor/etc): init runs it with syncexec (exec does not wait) at the start of the vendor pre-init
+  job, where 0001 mounted the tmpfs. It looks for the GPT partition named "ohdata" (scripts/14-data-partition.sh
+  makes one from the end of Android's userdata), makes its device node if ueventd has not yet, runs e2fsck -p
+  (e2fsck -y when that leaves errors: a hard reset is common on this phone and nobody is there to answer) and
+  mounts it ext4 on /data. Without the partition, or when it does not mount, /data is the tmpfs of 0001.
+- the token setup after the mount stays as 0001 has it (the system init.cfg runs it on the read-only root first)
+
+diff --git a/fajita/cfg/BUILD.gn b/fajita/cfg/BUILD.gn
+index fc78b05..996619e 100755
+--- a/fajita/cfg/BUILD.gn
++++ b/fajita/cfg/BUILD.gn
+@@ -55,6 +55,13 @@ ohos_prebuilt_etc("logdump.sh") {
+   part_name = "qualcomm_products"
+ }
+ 
++ohos_prebuilt_etc("mount-data.sh") {
++  install_enable = true
++  source = "mount-data.sh"
++  install_images = [ chipset_base_dir ]
++  part_name = "qualcomm_products"
++}
++
+ ohos_prebuilt_etc("init.insmod.sh") {
+   install_enable = true
+   source = "init.insmod.sh"
+@@ -79,6 +86,7 @@ group("init_configs") {
+     ":init.fajita.sh",
+     ":init.insmod.sh",
+     ":logdump.sh",
++    ":mount-data.sh",
+     ":modprobe",
+   ]
+ }
+diff --git a/fajita/cfg/init.fajita.cfg b/fajita/cfg/init.fajita.cfg
+index d2b50d7..9756429 100755
+--- a/fajita/cfg/init.fajita.cfg
++++ b/fajita/cfg/init.fajita.cfg
+@@ -5,7 +5,7 @@
+     "jobs" : [{
+             "name" : "pre-init",
+             "cmds" : [
+-                "mount tmpfs tmpfs /data nosuid nodev noatime mode=0771,size=4g",
++                "syncexec /system/bin/sh /vendor/etc/mount-data.sh",
+                 "chown system system /data",
+                 "chmod 0771 /data",
+                 "mkdir /data/service 0711 root root",
+diff --git a/fajita/cfg/mount-data.sh b/fajita/cfg/mount-data.sh
+new file mode 100644
+index 0000000..9475e75
+--- /dev/null
++++ b/fajita/cfg/mount-data.sh
+@@ -0,0 +1,36 @@
++#!/system/bin/sh
++# /data for OpenHarmony on a OnePlus 6. init runs this with syncexec at the start of the vendor pre-init job.
++# With a GPT partition named "ohdata" (westlake-oneplus scripts/13-data-partition.sh makes one from the end of
++# Android's userdata), /data is that partition (ext4) and survives reboots. Without one, or when it cannot be
++# mounted, /data is a 4 GB RAM disk as before, and everything on it is lost at the next boot.
++PATH=/system/bin:/bin
++log() { echo "mount-data: $*" > /dev/kmsg; }
++dev=
++for u in /sys/class/block/*/uevent; do
++    grep -qx 'PARTNAME=ohdata' "$u" 2>/dev/null || continue
++    d=${u%/uevent}
++    dev=/dev/block/${d##*/}
++    # this early, ueventd may not have made the node yet
++    if [ ! -b "$dev" ]; then
++        mm=$(cat "$d/dev")
++        mknod "$dev" b "${mm%%:*}" "${mm##*:}"
++    fi
++    break
++done
++if [ -n "$dev" ]; then
++    # 0: clean, 1 or 2: fixed. 4 and up: errors were left for a person to answer; there is nobody to ask, so
++    # let e2fsck fix them all (this is a test phone's data, and the alternative is an unusable /data)
++    out=$(e2fsck -p "$dev" 2>&1)
++    rc=$?
++    if [ "$rc" -ge 4 ]; then
++        log "e2fsck -p left errors ($rc): $(echo "$out" | head -n 1); running e2fsck -y"
++        out=$(e2fsck -y "$dev" 2>&1)
++        rc=$?
++    fi
++    if mount -t ext4 -o nosuid,nodev,noatime "$dev" /data; then
++        log "/data is $dev (e2fsck $rc: $(echo "$out" | tail -n 1))"
++        exit 0
++    fi
++    log "could not mount $dev (e2fsck $rc); /data is a RAM disk"
++fi
++mount -t tmpfs -o nosuid,nodev,noatime,mode=0771,size=4g tmpfs /data

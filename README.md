@@ -7,7 +7,9 @@ put them on a phone (or to install the [prebuilt images](#install-without-buildi
 It builds OpenHarmony **6.1.0.31** (tag `OpenHarmony-v6.1-Release`, API 23) for the community OnePlus 6T port
 ([gitee.com/ohos_port](https://gitee.com/ohos_port), product `fajita`) and adapts it to the OnePlus 6 with a
 5.10.194 kernel. OH lives on **slot B only**. Android on slot A (and its data) stays as it is, and OH is
-RAM-booted from the PC (`fastboot boot`), so the boot partitions are never flashed.
+RAM-booted from the PC (`fastboot boot`), so the boot partitions are never flashed. Optionally
+([Persistent OH](#persistent-oh-optional)), OH starts by itself from boot_b and keeps `/data` on a partition of
+its own, at the cost of Android's data.
 
 ## OpenHarmony 7.0 (this branch, `oh-7.0`)
 
@@ -100,9 +102,10 @@ How this was verified (2026-11-17):
   boot completed 37 s after the RAM boot, 45 apps installed, launcher and SystemUI running.
 
 Known limitations:
-- `/data` is a RAM disk (tmpfs). Nothing persists across reboots and every boot is a first boot (about 45 s
-  of system-app installation before the launcher appears). The phone's own `userdata` stays Android's.
-- OH is started from a PC each time (`fastboot boot`). `12-boot-android.sh` goes back to Android; a plain
+- `/data` is a RAM disk (tmpfs) unless OH has a partition of its own ([Persistent OH](#persistent-oh-optional)).
+  Nothing persists across reboots and every boot is a first boot (about 45 s of system-app installation before
+  the launcher appears). The phone's own `userdata` stays Android's.
+- OH is started from a PC each time (`fastboot boot`), unless `13-flash-boot.sh` made it the phone's default. `12-boot-android.sh` goes back to Android; a plain
   reboot gets there too, but only after slot B (left active by the install) fails to boot and the bootloader
   falls back to slot A.
 - Avoid Android system updates while you use OH: A/B updates (e.g. LineageOS) install to the inactive slot B,
@@ -181,11 +184,38 @@ Then for example `hdc shell`, `hdc shell snapshot_display -f /data/local/tmp/s.j
 flash the saved `dtbo_b.img` (`fastboot flash dtbo_b phone-backup/dtbo_b.img`) and let an Android update or a
 flash rewrite `system_b`/`vendor_b`.
 
+## Persistent OH (optional)
+
+By default OH leaves the phone as it was: only slot B's system and vendor are written, OH is RAM-booted from the
+PC and `/data` is a RAM disk. Two scripts make OH the phone's own system instead (verified with OH 7.0 on
+2026-11-18):
+
+```sh
+scripts/13-flash-boot.sh                            # boot_b <- the OH boot image; slot B active, marked successful
+scripts/14-data-partition.sh --erase-android-data   # userdata -> Android (ANDROID_GB, default 32) + ohdata (ext4)
+```
+
+- `13-flash-boot.sh` writes `$BOOT_IMG` to boot_b and, once OH is up, marks slot B as booted successfully (as
+  Android's boot control does; without the mark the bootloader counts down slot B's tries and falls back to slot
+  A). A reboot, a reset or a recovery from a hang then starts OH without the PC. Android on slot A stays as it is:
+  `12-boot-android.sh` still goes back to it, and `13-flash-boot.sh` makes OH the default again. Undo:
+  `fastboot flash boot_b phone-backup/boot_b.img`.
+- `14-data-partition.sh` **erases Android's data**. It splits `userdata` (the last partition on its disk) into a
+  smaller `userdata`, which Android formats at its next boot (Android then starts like a new phone: setup, USB
+  debugging and rooted debugging need the phone's screen), and `ohdata`, which the board's `mount-data.sh`
+  mounts on `/data` at every boot (patch `device/board/oneplus/0003`; without the partition `/data` stays a RAM
+  disk, so the same images work either way). Run `13-flash-boot.sh` first: once Android's data is gone it has no
+  root adb until someone sets it up again, and OH has to start by itself. The partition table before the split is
+  saved to `phone-backup/`.
+- Then the Wi-Fi login, the installed apps and everything else on `/data` survive reboots. The first boot on the
+  new partition is a first boot as usual; `mount-data.sh` checks the file system (`e2fsck`) at every boot, since a
+  hang ends in a hard reset.
+
 ## What the patches change
 
 | Patch | Why |
 |---|---|
-| [`device/board/oneplus`](patches/oh/device/board/oneplus) | 5.10.194 modules; `/data` on tmpfs with the token setup redone after the mount (otherwise every native service has access token 0, samgr rejects them all and init panics the kernel); USB controller `a600000.dwc3` (the 6.6 name `a600000.usb` leaves hdc without USB); optional log dumper; the kernel wake lock `no_suspend`; `icc_osm_l3` so the CPU frequency driver probes; with SceneBoard, `audio_server` stopped at boot (no sound card) |
+| [`device/board/oneplus`](patches/oh/device/board/oneplus) | 5.10.194 modules; `/data` on tmpfs with the token setup redone after the mount (otherwise every native service has access token 0, samgr rejects them all and init panics the kernel); USB controller `a600000.dwc3` (the 6.6 name `a600000.usb` leaves hdc without USB); optional log dumper; the kernel wake lock `no_suspend`; `icc_osm_l3` so the CPU frequency driver probes; with SceneBoard, `audio_server` stopped at boot (no sound card); `/data` on the `ohdata` partition when the phone has one (`0003`, see [Persistent OH](#persistent-oh-optional)) |
 | [`vendor/oneplus`](patches/oh/vendor/oneplus) | parts OH 6.1 needs in the fajita product config; drop two features 6.1 rejects; Wi-Fi as on rk3568 (nl80211 driver client, default chip HAL, chip driver service); no auto-suspend on screen timeout; SceneBoard as wukong100 (window manager feature, preinstall entries, the prebuilt's signing fingerprint, settings files) and RenderService uni-render |
 | [`foundation/communication/wifi`](patches/oh/foundation/communication/wifi) | scan results: the beacon P2P element was read past the end of the probe-response buffer (crashed the Wi-Fi service on 7.0) |
 | [`device/soc/qualcomm`](patches/oh/device/soc/qualcomm) | the display HDI libraries wait for the IDL headers they include (v1.1-v1.3); without it a clean build can fail with `'v1_2/display_composer_type.h' file not found` |
