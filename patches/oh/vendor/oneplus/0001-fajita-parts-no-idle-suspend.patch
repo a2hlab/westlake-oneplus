@@ -20,6 +20,13 @@ Product config for fajita on OH 7.0 (the port's vendor repo has no 6.1 or 7.0 br
   SystemUI are disabled in SceneBoard mode, and the phone stayed at the boot logo
 - graphic_2d_feature_rs_enable_uni_render, as wukong100: SceneBoard draws through RenderService's uni-render; with
   divided render its UI contexts had no task runner and the screen stayed black
+- Settings: the 7.0 prebuilt (applications/standard/hap), not the port's Settings 1.0.0 in default_app_config,
+  which overrode it and has no enterprise (802.1X/EAP) Wi-Fi pages
+- product_fajita.para: const.distributed_file_property.enabled=false. /data is a RAM disk where hmdfs cannot be
+  mounted; with hmdfs on, the storage daemon fails StartUser, user 100 is never unlocked, and SceneBoard
+  refuses to start any app that is not a system app (ERR_BLOCK_START_FIRST_BOOT_SCREEN_UNLOCK)
+- window_manager_config.xml: window decoration off, as wukong100 (floating and fullscreen modes). Native OH apps
+  (Settings) still draw ArkUI's title row with window buttons on this phone; that comes from elsewhere (open)
 diff --git a/fajita/config.json b/fajita/config.json
 index ddd18b3..7da02bc 100755
 --- a/fajita/config.json
@@ -302,6 +309,35 @@ index 48d75d7..724963c 100644
          "delayMs": 0
      },
      "lid": {
+diff --git a/fajita/custom_conf/window_manager_config.xml b/fajita/custom_conf/window_manager_config.xml
+index baf7741..d884ca7 100644
+--- a/fajita/custom_conf/window_manager_config.xml
++++ b/fajita/custom_conf/window_manager_config.xml
+@@ -15,7 +15,9 @@
+  -->
+ <Configs>
+     <!--decor enable is true means app main window show decoration-->
+-    <decor enable="true"></decor>
++    <decor enable="false">
++        <supportedMode>floating fullscreen</supportedMode>
++    </decor>
+     <!--max number of main window that could be shown on display-->
+     <maxAppWindowNumber>100</maxAppWindowNumber>
+     <!--maximum number of windows supported by unified rendering -->
+diff --git a/fajita/default_app_config/apps_path.gni b/fajita/default_app_config/apps_path.gni
+index 6b43582..48cc1fe 100755
+--- a/fajita/default_app_config/apps_path.gni
++++ b/fajita/default_app_config/apps_path.gni
+@@ -17,7 +17,8 @@ apps_target_dir = "app"
+ 
+ apps_files = [
+   "com.hihope.recorder/Recorder.hap",
+-  "com.ohos.settings/Settings.hap",
++  # com.ohos.settings: the 7.0 prebuilt (applications/standard/hap), which has the enterprise (802.1X/EAP)
++  # Wi-Fi pages; the port's Settings 1.0.0 here has none
+   "org.ohosdev.foh/F-OH-1.3.4.hap",
+   "com.ohos.advancereboot/AdvanceReboot.hap",
+   "com.example.kikakeyboard/kikaInput.hap",
 diff --git a/fajita/etc/BUILD.gn b/fajita/etc/BUILD.gn
 index e4e6702..534e04d 100644
 --- a/fajita/etc/BUILD.gn
@@ -330,6 +366,22 @@ index e4e6702..534e04d 100644
 +    ":poweroff_config",
    ]
  }
+diff --git a/fajita/etc/para/product_fajita.para b/fajita/etc/para/product_fajita.para
+index d16858f..b28a988 100644
+--- a/fajita/etc/para/product_fajita.para
++++ b/fajita/etc/para/product_fajita.para
+@@ -32,4 +32,9 @@ const.SystemCapability.Cloud.AAID=true
+ const.SystemCapability.Cloud.VAID=true
+ const.SystemCapability.BundleManager.BundleFramework.SandboxApp=true
+ const.SystemCapability.BundleManager.BundleFramework.QuickFix=true
+-const.SystemCapability.Applications.settings.Core=true
+\ No newline at end of file
++const.SystemCapability.Applications.settings.Core=true
++
++# OnePlus 6 port: /data is a RAM disk (tmpfs), where hmdfs cannot be mounted. With hmdfs on, the storage daemon
++# fails StartUser, user 100 is never unlocked, and SceneBoard starts no app that is not a system app
++# (ERR_BLOCK_START_FIRST_BOOT_SCREEN_UNLOCK).
++const.distributed_file_property.enabled=false
 diff --git a/fajita/etc/scb_effect_config/gesture_navigation_setting.json b/fajita/etc/scb_effect_config/gesture_navigation_setting.json
 new file mode 100644
 index 0000000..3a07531

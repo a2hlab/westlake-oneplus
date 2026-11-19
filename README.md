@@ -14,8 +14,10 @@ RAM-booted from the PC (`fastboot boot`), so the boot partitions are never flash
 This branch builds **OpenHarmony 7.0.0.38** (tag `OpenHarmony-v7.0-Release`) for the same phone, with
 **SceneBoard**, the window manager OpenHarmony and HarmonyOS phones use (the 6.1 branch runs OH's classic window
 manager). Verified on 2026-11-18: built on a 64-thread server; the images (slot B, same install and boot steps as
-6.1) boot in about 25 s to SceneBoard's lock screen; a swipe unlocks it to the home and app screens. Westlake on
-7.0 is not tested yet.
+6.1) boot in about 25 s to SceneBoard's lock screen; a swipe unlocks it to the home and app screens. Westlake runs
+Android apps on it as OH applications (its managed launch): see `westlake/README.md` on the `main` branch.
+Unlock a minute or so after boot: an unlock while the system is still starting can block SceneBoard for 6 s
+(`THREAD_BLOCK_6S`), and OH then restarts it.
 
 How SceneBoard is enabled (all in `patches/oh/vendor/oneplus`, as the 7.0 tree's own SceneBoard product
 `vendor/revoview/wukong100` does): `window_manager_use_sceneboard`, which makes `applications/standard/hap` install
@@ -34,7 +36,9 @@ Checked on the phone with 7.0 + SceneBoard:
 |---|---|
 | SceneBoard lock screen, unlock, home and app screens | yes |
 | CPU frequency scaling (schedutil, up to 1.77 / 2.65 GHz) | yes: the board patch loads `icc_osm_l3`; without it the CPU frequency driver waited for it forever (6.1 too) |
-| Wi-Fi: Settings > WLAN switches on and lists the networks in range | yes on the classic-window-manager build of this branch; not rechecked with SceneBoard |
+| Wi-Fi: Settings > WLAN switches on and lists the networks in range | yes |
+| enterprise Wi-Fi (802.1X/EAP) | yes: Settings shows the EAP login (method, phase 2, CA certificate, identity, password), and a corporate network (WPA-EAP, PEAP) connected with an address and internet |
+| Android apps through Westlake (managed launch) | yes: Fossify Clock as an OH application, with OH's input, keyboard and BACK |
 | Bluetooth | no: the Bluetooth driver host needs a vendor `libbt_vendor.z.so`, which the port does not have |
 | audio | no: the sound card's driver waits for the audio DSP (`soc@0:sound` deferred); `audio_server` is stopped at boot |
 | suspend | the kernel is kept out of it by the board's wake lock (held after boot, no suspends) |
@@ -61,6 +65,9 @@ What 7.0 needs on top of the 6.1 port:
 | hdc, updater | two account/updater-mode switches were tied to SELinux, which this port turns off |
 | libnl | already pre-configured in 7.0; the 6.1 autoconf patch is dropped |
 | Wi-Fi | without the chip driver service, which the port never declared, 7.0's Wi-Fi service crashed at every start and took Settings with it: the nl80211 driver client, the default chip HAL and the chip service, as on rk3568 (`patches/oh/vendor/oneplus`); plus a scan-result read past the end of a buffer (`patches/oh/foundation/communication/wifi`) |
+| Settings | the port's own Settings 1.0.0 (`default_app_config`) replaced the 7.0 prebuilt and has no enterprise Wi-Fi pages: dropped, so the prebuilt installs (`patches/oh/vendor/oneplus`) |
+| user unlock | hmdfs cannot be mounted on `/data`, a RAM disk here; the storage daemon then fails to start user 100, which is never unlocked, and SceneBoard refuses to start any app that is not a system app (`ERR_BLOCK_START_FIRST_BOOT_SCREEN_UNLOCK`): `const.distributed_file_property.enabled=false` (`patches/oh/vendor/oneplus`) |
+| window decoration | on in the port's window config: off, as wukong100 (`patches/oh/vendor/oneplus`). Native OH apps such as Settings still draw ArkUI's title row with window buttons; the cause is not found yet (Westlake's apps have none) |
 
 gitcode's web firewall answered git clones with HTTP 418 on 2026-11-18 (after the sync for this branch
 finished), from two networks; a sync may have to wait for that to clear.
