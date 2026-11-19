@@ -42,12 +42,30 @@ python3 tools/link_appspawn.py --workspace "$ws" --objects "$a/objects" --runtim
   --core-runtime "$(wl_build "$WL_NATIVE_RUNTIME")" --imports "$a/imports" --out "$a/link" | tail -1 | cut -c1-100
 [ -s "$a/link/appspawn-x" ] || die "no $a/link/appspawn-x"
 
+# The runtime library (liboh_android_runtime.so) from the same checkout: the override build's copy predates the
+# dialog fixes (westlake bbf83eb: a window's buffer queue follows the window's size), and on this phone's Adreno a
+# window drawn into buffers of another size wrote past them (GPU faults; DramaWave had them, then none). It needs
+# the GUI AIDL header build (tools/generate_gui_aidl.py), WL_GUI_HEADERS.
+runtime_lib=""
+if [ -n "${WL_GUI_HEADERS:-}" ]; then
+  step "runtime library (liboh_android_runtime.so)"
+  r2=$b/runtime; mkdir -p "$r2"
+  python3 tools/compile_native_inventory.py --workspace "$ws" --inventory native/android-runtime15-sources.json \
+    --westlake-source "$WL_WESTLAKE" --header-build "$WL_GUI_HEADERS" --out "$r2/objects" | tail -1
+  printf '{"liboh_android_runtime.so": {"build": "%s", "additional_dependencies": ["libandroid.so", "libwestlake_libcore_linux.so"]}}\n' \
+    "$r2/objects" > "$r2/map.json"
+  python3 tools/build_native_imports.py --workspace "$ws" --firmware-abi "$WL_FIRMWARE_ABI" \
+    --object-map "$r2/map.json" --out "$r2/imports" | tail -1
+  python3 tools/link_native_platform.py --workspace "$ws" --object-map "$r2/map.json" --imports "$r2/imports" \
+    --core-runtime "$(wl_build "$WL_NATIVE_RUNTIME")" --out "$r2/link" | tail -1
+  runtime_lib=$r2/link/liboh_android_runtime.so; [ -s "$runtime_lib" ] || die "no $runtime_lib"
+fi
 step "override -> $WL_OUT/override-op6"
-o=$WL_OUT/override-op6; rm -rf "$o"; cp -a "$(wl_build "$WL_OVERRIDE")" "$o"; cp "$lib" "$a/link/appspawn-x" "$o/lib/"
-python3 -I - "$o" "$(git -C "$WL_WESTLAKE" rev-parse --short HEAD)" <<'EOF'
+o=$WL_OUT/override-op6; rm -rf "$o"; cp -a "$(wl_build "$WL_OVERRIDE")" "$o"; cp "$lib" "$a/link/appspawn-x" $runtime_lib "$o/lib/"
+python3 -I - "$o" "$(git -C "$WL_WESTLAKE" rev-parse --short HEAD)" "${runtime_lib:+liboh_android_runtime.so}" <<'EOF'
 import hashlib, json, os, sys
 o, rev = sys.argv[1:3]; p = os.path.join(o, 'artifacts.json'); d = json.load(open(p))
-for name in ('liboh_adapter_bridge.so', 'appspawn-x'):
+for name in ['liboh_adapter_bridge.so', 'appspawn-x'] + [n for n in sys.argv[3:] if n]:
     h = hashlib.sha256(open(os.path.join(o, 'lib', name), 'rb').read()).hexdigest()
     d['artifacts'][name]['sha256'] = h
     d['description'] = d.get('description', '') + '; OnePlus 6: ' + name + ' from westlake ' + rev

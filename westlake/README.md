@@ -120,7 +120,7 @@ What it needs, besides the 6.1 setup above:
 Run `01` to `04` as on 6.1 (`02` builds the spawner too), unlock the phone, then `06-managed.sh APP`. Unlock a minute
 or so after boot: an unlock while the system is still starting can block SceneBoard for 6 s, and OH then restarts it.
 
-Five things had to change for 7.0, and what happens without them:
+Six things had to change for 7.0, and what happens without them:
 
 | | without it | fix |
 |---|---|---|
@@ -129,6 +129,7 @@ Five things had to change for 7.0, and what happens without them:
 | SceneBoard makes the window's node | 7.0 sends a node id at Connect, and SceneBoard creates the window's render node with it. The id of a node the app had made itself left two nodes under one id, and under partial rendering every frame was skipped: SceneBoard's blur stayed on screen | westlake `oneplus-oh70`: a fresh id; the app's content node hangs under a root node of its own, under SceneBoard's node. The root node also tells SceneBoard the first frame is there, so it removes the starting window |
 | OH's launch timeouts | OH ends an ability that is not attached within its load timeout (about 10 s from the process start) or does not report FOREGROUND within its foreground timeout (about 5 s); an Android app binds and draws more slowly than an OH app starts, and the bridge answered OH's calls only as the app got to them: Instagram's 9.5 s bind (SceneBoard: `handleLoadTimeout`) and Spotify's first frame 5 s after OH's request ended them before they drew | westlake `oneplus-oh70`: the bind and the activity launch run on threads of their own, so the ability is attached at once; ApplicationForegrounded and FOREGROUND are sent by the bridge when the app's main thread has not sent them in time (300 ms, 3.5 s) |
 | `finishAffinity()` | Westlake answered it without finishing anything; WhatsApp's first activity finishes that way after starting its EULA, kept the OH ability, and the EULA's window waited for a main window that never came | westlake `oneplus-oh70`: it finishes the activities as Android's task manager does, so the ability passes to the next activity |
+| the runtime library | the override build's `liboh_android_runtime.so` predates westlake's dialog fixes: a window smaller than the screen kept buffers of another size, and on this phone's Adreno the app's GPU wrote past them (IOMMU faults, GPU hang recovery; DramaWave in every run) | `02-bridge.sh` builds the library from the same checkout as the bridge when `WL_GUI_HEADERS` names the GUI AIDL header build (westlake `tools/generate_gui_aidl.py`) |
 
 ## Corpus rounds (7.0)
 

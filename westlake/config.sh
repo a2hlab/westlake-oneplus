@@ -15,6 +15,8 @@ WL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 #   WL_USES_LIBS (space-separated), WL_OVERRIDE (runtime-library override the bridge is added to),
 #   WL_SHIM (bionic shim), WL_WEBVIEW_INPUT, WL_HOST_HAP (signed host HAP), WL_APP_INPUT_<app> (prepared app),
 #   WL_HOST_BUILD (the unsigned host build WL_HOST_HAP is signed from; 06-managed.sh makes each app's OH bundle from it)
+#   WL_GUI_HEADERS (the GUI AIDL header build, westlake tools/generate_gui_aidl.py: 02-bridge.sh then also builds
+#   liboh_android_runtime.so from WL_WESTLAKE into override-op6)
 : "${WL_RUNTIME_LIBS:=libandroid_native_network_compat.so libart.so libcamera2ndk.so libmediandk.so liboh_adapter_bridge.so liboh_android_runtime.so libvulkan.so libwl_missing_natives.so}"
 : "${WL_HOST:=org.westlake.imehost}"
 
