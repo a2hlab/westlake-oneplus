@@ -200,8 +200,11 @@ bring-up record: every failure, how it showed and what fixed it.
 
 ## Debugging a boot
 
-- The boot log is on the phone screen (`console=tty0`, large font). `BOOT_CMDLINE_EXTRA=ignore_loglevel
-  scripts/06-make-boot.sh` shows every message.
+- The screen's console (`console=tty0`, large font) shows only emergencies (`loglevel=1`): a flood of kernel errors
+  drawn there froze the phone (see `BOOT_CMDLINE_BASE` in `scripts/config.sh`). To watch a boot,
+  `BOOT_CMDLINE_EXTRA=ignore_loglevel scripts/06-make-boot.sh` shows every message.
+- A phone that hangs or panics waits in Qualcomm crash-dump mode (USB `05c6:900e`) with its RAM intact; the main
+  branch's `scripts/crashdump.py` reads the kernel's console log from there and restarts the phone.
 - `BOOT_CMDLINE_EXTRA=op6.logdump=1 scripts/06-make-boot.sh` makes OH write its kernel log, process list and
   crash dumps every 4 s to the unused end of `system_b`. After a hang, force-restart (Power ~10 s; the phone
   falls back to Android) and run `scripts/read-logdump.sh`. ramoops does not survive a reboot on this phone.
