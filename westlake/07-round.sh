@@ -68,6 +68,9 @@ tag=${1:?usage: $0 TAG [FIRST [LAST]] | --setup}; first=${2:-1}; last=${3:-10000
 LOGS=$RS/logs/$tag; LAUNCH=$RS/launch; RECV=$RS/recv; mkdir -p "$LOGS" "$LAUNCH" "$RECV"
 LOG=$RS/round-$tag.log; RESULTS=$LOGS/results.tsv; touch "$RESULTS"
 WAIT=${WAIT:-45}; MINWAIT=${MINWAIT:-20}; MIN_FREE_MB=${MIN_FREE_MB:-1400}
+# Memory: an app starts only with MIN_MEM_MB available, and is stopped early when less than STOP_MEM_MB is left.
+# An app's memory and the RAM disk come out of the same 7.6 GB.
+MIN_MEM_MB=${MIN_MEM_MB:-2000}; STOP_MEM_MB=${STOP_MEM_MB:-600}
 say() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
 dev() { wl_hdc shell "$@" | tr -d '\r'; }
 recv() {  # recv REMOTE LOCALNAME: into $RECV
@@ -77,6 +80,10 @@ recv() {  # recv REMOTE LOCALNAME: into $RECV
 }
 free_mb() { dev "df -k /data | tail -1" | python3 -I -c 'import sys
 row = sys.stdin.read().split(); print(int(row[3]) // 1024 if len(row) > 3 and row[3].isdigit() else "")'; }
+# The phone's available memory in MB (MemAvailable), empty when it did not answer. /data is a RAM disk: what it holds
+# and what the apps use come out of the same memory.
+mem_mb() { dev "grep MemAvailable /proc/meminfo" | python3 -I -c 'import sys
+row = sys.stdin.read().split(); print(int(row[1]) // 1024 if len(row) > 1 and row[1].isdigit() else "")'; }
 
 FWREPORT=$WL_OUT/framework/device-report.json
 FWSTAGE=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["stage"])' "$FWREPORT")
@@ -117,6 +124,7 @@ cleanup_board() {
 cleanup_board
 dev "power-shell wakeup >/dev/null; power-shell timeout -o 86400000 >/dev/null; exit 0" >/dev/null
 
+
 run_app() {
   local pkg=$1 key=hk-$1 in=$IN/prep-hk-$1 o=$LAUNCH/$tag-hk-$1 ev=$LOGS/hk-$1 t_app; t_app=$(date +%s)
   [ -f "$in/app-input.json" ] || { result "$pkg" not-staged "$(grep "^$key " "$LOG" | tail -1 | cut -c1-150)"; return; }
@@ -143,6 +151,11 @@ print(json.load(open(sys.argv[1]))["application"]["launch_activity"])' "$in/app-
     cleanup_board; mb=$(free_mb)
     [ -n "$mb" ] && [ "$mb" -ge "$MIN_FREE_MB" ] || { say "DISK GUARD: /data has ${mb:-?} MB free < $MIN_FREE_MB"; return 3; }
   fi
+  local mem; mem=$(mem_mb)
+  if [ -z "$mem" ] || [ "$mem" -lt "$MIN_MEM_MB" ]; then
+    cleanup_board; sleep 10; mem=$(mem_mb)
+    [ -n "$mem" ] && [ "$mem" -ge "$MIN_MEM_MB" ] || { say "MEMORY GUARD: ${mem:-?} MB available < $MIN_MEM_MB"; return 3; }
+  fi
   rm -rf "$o" "$o.log"; mkdir -p "$o"
   # Its OH bundle, named after the package; its main ability is the launcher activity.
   if ! python3 "$M/tools/make_managed_bundle.py" --host-build "$HOSTB" --package "$pkg" --activity "$activity" \
@@ -155,6 +168,10 @@ print(json.load(open(sys.argv[1]))["application"]["launch_activity"])' "$in/app-
   echo "$pkg" > "$RS/.installed"
   local r; r=$(dev "bm install -r -p /data/local/tmp/wl-round.hap; rm -f /data/local/tmp/wl-round.hap" | tail -1)
   case "$r" in *successfully*) ;; *) result "$pkg" install-failed "$r"; rm -f "$RS/.installed"; return ;; esac
+  # The kernel's clock at the start: the app's evidence keeps the kernel log from here (GPU faults in render_service
+  # on this phone: round o70a's hang followed a string of them). After a hang, sahara.py in crash-dump mode reads the
+  # whole console log from the phone's RAM (ramoops).
+  local kstart; kstart=$(dev "cut -d' ' -f1 /proc/uptime" | grep -o '^[0-9.]*' | head -1)
   # The framework, hard-linked where the launcher looks for its shared copy; the launch mark for crash dumps.
   dev "S=/data/app/el2/100/base/$pkg/files/a2hlab-shared-${FWSTAGE##*/}; [ -f \$S/.a2hlab-shared-ready ] ||
     { rm -rf \$S.part && mkdir \$S.part && cp -al $FWSTAGE/. \$S.part/ && touch \$S.part/.a2hlab-shared-ready &&
@@ -189,17 +206,24 @@ d = json.load(open(sys.argv[1])); print(d.get("child", ""), d.get("parent", ""),
   else
     # The process map sampled until the process ends (to place a crash pc), its hilog; the launch archive goes.
     local m=/data/local/tmp/ev-$C.maps
-    dev "rm -f $S/launch-inputs.tar /data/local/tmp/ev-$C.*;
+    # The app goes first when memory runs out: the kernel's OOM killer otherwise picks among OH's own services too,
+    # and init panics the kernel when a critical one keeps failing.
+    dev "echo 1000 > /proc/$C/oom_score_adj 2>/dev/null; rm -f $S/launch-inputs.tar /data/local/tmp/ev-$C.*;
       nohup sh -c 'while [ -d /proc/$C ]; do cat /proc/$C/maps > $m.new 2>/dev/null && [ -s $m.new ] && mv $m.new $m; sleep 0.5; done' >/dev/null 2>&1 &
       nohup hilog -P $C > /data/local/tmp/ev-$C.hilog 2>/dev/null & exit 0" >/dev/null
     local err=$R/private-tmp/adapter_child_$C.stderr t0 drew="" ok=0 st n left=""
     t0=$(date +%s)
     while [ $(( $(date +%s) - t0 )) -lt "$WAIT" ]; do
-      st=$(dev "[ -d /proc/$C ] && echo A || echo D; c=\$(grep -c OH_WSA-relayout $err 2>/dev/null); echo \${c:-0};
-        df -k /data | tail -1" | tr '\n' ' ')
-      case "$st" in D*) left="gone after $(( $(date +%s) - t0 ))s"; break ;; esac
-      n=$(echo "$st" | awk '{print $2+0}')
-      if [ "$(echo "$st" | awk '{print $6+0}')" -lt 204800 ]; then left="stopped: /data below 200 MB"; break; fi
+      # STATE <alive> <relayouts> <data free KB> <memory available KB>, or the phone did not answer.
+      st=$(dev "[ -d /proc/$C ] && a=A || a=D; c=\$(grep -c OH_WSA-relayout $err 2>/dev/null);
+        f=\$(df -k /data | tail -1); m=\$(grep MemAvailable /proc/meminfo); set -- \$f; f=\$4; set -- \$m;
+        echo STATE \$a \${c:-0} \$f \$2" | grep -o 'STATE [AD] [0-9]* [0-9]* [0-9]*' | head -1)
+      [ -n "$st" ] || { left="the phone stopped answering"; break; }
+      local alive dfree mavail
+      read -r _ alive n dfree mavail <<< "$st"
+      [ "$alive" = D ] && { left="gone after $(( $(date +%s) - t0 ))s"; break; }
+      [ "$dfree" -lt 204800 ] && { left="stopped: /data below 200 MB"; break; }
+      [ "$mavail" -lt $((STOP_MEM_MB * 1024)) ] && { left="stopped: memory below $STOP_MEM_MB MB"; break; }
       [ -z "$drew" ] && [ "$n" -gt 0 ] && drew=$(date +%s)
       if [ -n "$drew" ] && [ $(( $(date +%s) - t0 )) -ge "$MINWAIT" ]; then
         dev "power-shell wakeup >/dev/null; snapshot_display -f /data/local/tmp/rg.jpeg >/dev/null; exit 0" >/dev/null
@@ -209,12 +233,24 @@ d = json.load(open(sys.argv[1])); print(d.get("child", ""), d.get("parent", ""),
       fi
       sleep 2
     done
+    # A phone that stopped answering has no evidence to give: the app gets no result line, so the next run of the
+    # round launches it again, and the round stops here (the next app would find no phone either).
+    if [ "$left" = "the phone stopped answering" ]; then
+      say "hk-$pkg: the phone stopped answering during its wait; stopping the round (it runs again on resume)"
+      rm -f "$ev".*
+      return 4
+    fi
     # The screenshot the scorer judges; then ART's thread dump of every thread into the log (what a stalled main
     # thread waits on), then the log itself, and each of the app's other processes' logs (westlake ADR-0002).
     dev "power-shell wakeup >/dev/null; snapshot_display -f /data/local/tmp/rg.jpeg >/dev/null; exit 0" >/dev/null
     recv /data/local/tmp/rg.jpeg rg.jpeg && cp "$RECV/rg.jpeg" "$ev.jpeg"
     dev "[ -d /proc/$C ] && kill -3 $C; exit 0" >/dev/null && sleep 3
     dev "cat $err" > "$ev.stderr"
+    if head -c 200 "$ev.stderr" | grep -q '^\[Fail\]'; then
+      say "hk-$pkg: the phone stopped answering while its evidence was taken; stopping the round (it runs again on resume)"
+      rm -f "$ev".*
+      return 4
+    fi
     grep -o -E '\[WL-PROC\] started [^ ]+ pid=[0-9]+' "$ev.stderr" | while read -r _ _ proc pidv; do
       p=${pidv#pid=}; d=$ev.processes; mkdir -p "$d"
       f=$d/$proc.stderr; [ -e "$f" ] && f=$d/$proc-$p.stderr
@@ -236,13 +272,26 @@ d = json.load(open(sys.argv[1])); print(d.get("child", ""), d.get("parent", ""),
     result "$pkg" launched "child=$C ${left:-waited ${WAIT}s} relayouts=$(grep -c OH_WSA-relayout "$ev.stderr") \
 launch=$((t_launched - t_probe))s turn=$(( $(date +%s) - t_app ))s"
   fi
-  # Stop it: OH ends the app, then its spawner (every spawner but the router, which serves every app) and the
-  # rest; the uninstall removes its files.
+  # Stop it. First home (the gesture from the bottom edge), so that render_service composites the desktop and not
+  # the app's window when the app goes: on this phone a GPU fault in render_service followed most kills of an app
+  # still on screen (round o70a's hang came at one). Then OH ends the app, then its spawner (every spawner but the
+  # router, which serves every app) and the rest; the uninstall removes its files.
+  dev "power-shell wakeup >/dev/null; uinput -T -m 540 2270 540 1400 300 >/dev/null 2>&1; exit 0" >/dev/null; sleep 2
   dev "aa force-stop $pkg >/dev/null 2>&1; for p in \$(pidof $pkg) $C $PP; do kill -9 \$p; done 2>/dev/null;
     for p in \$(pidof appspawn-x); do case \"\$(ps -o args= -p \$p | tail -n 1)\" in *--route*) ;; *) kill -9 \$p;; esac; done;
     bm uninstall -n $pkg >/dev/null 2>&1; rm -rf $S /data/local/tmp/ev-$C.* /data/service/el1/public/westlake-registry/managed/$pkg;
     exit 0" >/dev/null
   rm -f "$RS/.installed"
+  # The kernel log of the app's turn, and how many GPU faults it had.
+  dev "dmesg" | python3 -I -c 'import re, sys
+start = float(sys.argv[1] or 0)
+for line in sys.stdin:
+    m = re.match(r"\[\s*(\d+\.\d+)\]", line)
+    if m and float(m.group(1)) >= start:
+        sys.stdout.write(line)' "${kstart:-0}" > "$ev.kmsg" 2>/dev/null
+  local faults; faults=$(grep -c -E "gpu fault|Unhandled context fault" "$ev.kmsg" 2>/dev/null)
+  [ "${faults:-0}" -gt 0 ] && say "hk-$pkg: $faults GPU fault lines in the kernel log during its turn"
+  [ -s "$ev.kmsg" ] || rm -f "$ev.kmsg"
   # The staged APKs go (app-input.json stays, as round.sh keeps it); the launch output once its report is kept.
   find "$in" -mindepth 1 ! -name app-input.json -delete 2>/dev/null
   rm -rf "$o"
