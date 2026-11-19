@@ -1,0 +1,29 @@
+Pad every buffer the display gralloc allocates to a multiple of 16 rows (was 2).
+
+Mesa's freedreno (the port's prebuilt Mesa 25.0.1, a6xx) resolves GMEM tiles to memory in 16x4 pixel blocks:
+RB_BLIT_SCISSOR is rounded up and not clipped to the buffer. With 2-row padding, a buffer whose height is not
+a multiple of 4 got GPU writes past its end. Seen on the OnePlus 6 (OH 7.0): a 759x1125 window was resolved as
+768x1128 into a 1126-row buffer (crashdec of the GPU crash dump: RB_BLIT_SCISSOR_BR 767,1127, pitch 3072); the
+IOMMU write fault was in the first page after the buffer. The overruns corrupt neighbouring GPU memory as well:
+"CP illegal instruction", hang recovery, and twice a frozen phone. Apps with dialogs and other windows of odd
+heights (Facebook, Xiaohongshu) and render_service's own off-screen buffers were hit. With 16-row padding the
+same apps ran without one fault. The pitch is already a multiple of 32 pixels (msm dumb buffers), so the
+16-pixel rounding across stays inside each row. The buffer handle keeps the requested width and height.
+
+diff --git a/sdm845/hardware/display/src/display_gralloc/hi_gbm_internal.h b/sdm845/hardware/display/src/display_gralloc/hi_gbm_internal.h
+index f7466b2..96d6b21 100755
+--- a/sdm845/hardware/display/src/display_gralloc/hi_gbm_internal.h
++++ b/sdm845/hardware/display/src/display_gralloc/hi_gbm_internal.h
+@@ -19,7 +19,11 @@
+ namespace OHOS {
+ namespace HDI {
+ namespace DISPLAY {
+-#define HEIGHT_ALIGN 2U
++/* Rows are padded to a multiple of 16. Mesa's freedreno (a6xx) resolves GMEM tiles in 16x4 pixel blocks
++ * (RB_BLIT_SCISSOR rounded up) without clipping them to the buffer: with only 2-row padding, a buffer whose
++ * height is not a multiple of 4 got GPU writes past its end (IOMMU write faults, and with them corrupted
++ * command streams: CP illegal instruction, hang recovery). The pitch is a multiple of 32 pixels already. */
++#define HEIGHT_ALIGN 16U
+ #define WIDTH_ALIGN 8U
+ 
+ #define MAX_PLANES 3
