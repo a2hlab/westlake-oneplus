@@ -9,7 +9,7 @@
 set -euo pipefail
 . "$(dirname "$0")/config.sh"
 wl_need WL_SC WL_WESTLAKE WL_NATIVE_RUNTIME
-abi=$WL_WESTLAKE/native/oh61-firmware-abi.json; [ -f "$abi" ] || die "$abi missing"
+abi=$WL_WESTLAKE/$WL_FIRMWARE_ABI; [ -f "$abi" ] || die "$abi missing"
 clang=$WL_SC/workspace/toolchains/ohos-sdk/native/llvm/bin/clang; [ -x "$clang" ] || die "$clang missing"
 fw=$WL_OUT/phone-fw; mkdir -p "$fw"
 

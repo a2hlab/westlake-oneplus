@@ -13,9 +13,23 @@ WL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Westlake build directories (under $WL_SC/verify/out unless absolute), set in local.sh:
 #   WL_APPSPAWN WL_CORE_RUNTIME WL_NATIVE_RUNTIME WL_CORE_JAVA WL_JAVA_EXT WL_FRAMEWORK WL_BOOT WL_RES WL_DATA
 #   WL_USES_LIBS (space-separated), WL_OVERRIDE (runtime-library override the bridge is added to),
-#   WL_SHIM (bionic shim), WL_WEBVIEW_INPUT, WL_HOST_HAP (signed host HAP), WL_APP_INPUT_<app> (prepared app)
+#   WL_SHIM (bionic shim), WL_WEBVIEW_INPUT, WL_HOST_HAP (signed host HAP), WL_APP_INPUT_<app> (prepared app),
+#   WL_HOST_BUILD (the unsigned host build WL_HOST_HAP is signed from; 06-managed.sh makes each app's OH bundle from it)
 : "${WL_RUNTIME_LIBS:=libandroid_native_network_compat.so libart.so libcamera2ndk.so libmediandk.so liboh_adapter_bridge.so liboh_android_runtime.so libvulkan.so libwl_missing_natives.so}"
 : "${WL_HOST:=org.westlake.imehost}"
+
+# --- the OpenHarmony release on the phone: 6.1 (classic window manager, this branch's images) or 7.0 (SceneBoard,
+# branch oh-7.0). The bridge is built against that release's headers and libraries.
+: "${WL_OH:=6.1}"
+if [ "$WL_OH" = 7.0 ]; then
+  : "${WL_FIRMWARE_ABI:=native/oh70-firmware-abi.json}"         # in $WL_WESTLAKE (westlake branch oneplus-oh70)
+  : "${WL_BRIDGE_INVENTORY:=native/bridge15-sources-oh70.json}"
+  : "${WL_BRIDGE_HEADERS:=}"                                     # the 7.0 header build (local.sh)
+else
+  : "${WL_FIRMWARE_ABI:=native/oh61-firmware-abi.json}"
+  : "${WL_BRIDGE_INVENTORY:=native/bridge15-sources.json}"
+  : "${WL_BRIDGE_HEADERS:=${WL_SC:+$WL_SC/imports/oh61-bridge-headers}}"
+fi
 
 # --- the phone ---
 : "${WL_HDC:=$HDC}"                     # hdc the Westlake probes run (on WSL: westlake/tools/hdc-retry.sh)

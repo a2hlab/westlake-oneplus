@@ -8,6 +8,11 @@ Verified 2026-11-18: from a fresh boot, `03` → `05` bring up Fossify Clock 1.6
 time ticking, and taps on the touchscreen at the places its controls are shown work (the Stopwatch tab opens,
 its start button starts it). Checked on the images of release `v6.1.0.31-r2`.
 
+Verified 2026-11-18 on OpenHarmony 7.0 with SceneBoard (branch `oh-7.0`): `06-managed.sh` runs Fossify Clock as an OH
+application ([below](#openharmony-70-with-sceneboard-managed-launch)). Its window sits between OH's bars and keeps
+updating. Taps arrive through OH's own input. The add-timer dialog is drawn centred, OH's keyboard opens for its
+label field and typing reaches it, and BACK hides the keyboard, then closes the dialog.
+
 ## What is different from Westlake's test board
 
 The test board runs the same OpenHarmony version (6.1.0.31), so every Westlake binary links against this
@@ -48,10 +53,11 @@ still failed the next call.
 | script | when | what |
 |---|---|---|
 | `01-phone-runtime.sh` | once per OH build | pulls the OH libraries Westlake links against, writes the firmware list with this phone's hashes, builds the GPU stand-in, makes `native-runtime-op6` |
-| `02-bridge.sh` | once per Westlake change | builds `liboh_adapter_bridge.so` with the classic-window-manager fix into `override-op6` |
+| `02-bridge.sh` | once per Westlake change | builds `liboh_adapter_bridge.so` (for `WL_OH`) and the spawner `appspawn-x` into `override-op6` |
 | `03-prep.sh` | after every boot | `sha256sum`/`chcon` on the phone, the kernel wake lock `no_suspend` if the image did not take it (suspend drops USB here), installs the host HAP |
 | `04-framework.sh` | after every boot | stages the framework and checks that it initialises (~3 min) |
-| `05-launch.sh APP` | per app | launches the app; prints the window lines and saves a screenshot |
+| `05-launch.sh APP` | per app (6.1) | launches the app over the host's window; prints the window lines and saves a screenshot |
+| `06-managed.sh APP` | per app (7.0) | makes, signs and installs the app's own OH bundle, launches it through OH; saves a screenshot |
 | `tap.sh X Y` | tests | a tap through the touchscreen's input node at screen pixel X,Y, as a finger would |
 
 `/data` is a RAM disk on this build, so `03` and `04` are repeated after each boot; nothing is written to the
@@ -85,3 +91,39 @@ Popups (menus, dropdowns): a popup's window is laid out in its parent's frame, a
 it in the display frame instead, below the status bar once the window had OH's bars as insets, so it was drawn a
 status bar lower than its views and taps: on Clock's overflow menu a tap on Settings opened About. A framework built
 from the westlake branch places it where Android does.
+
+## OpenHarmony 7.0 with SceneBoard: managed launch
+
+On 7.0 the phone runs SceneBoard, the window manager OpenHarmony and HarmonyOS phones use (branch `oh-7.0` of this
+repo). SceneBoard refuses a direct launch's window: a sub-window must come from the process that owns its parent
+window, and the app runs in a process of its own. So on 7.0 each APK runs as an OH application, Westlake's managed
+launch ([ADR-0008](https://github.com/a2hlab/westlake/blob/main/docs/adr/0008-one-oh-process-model-for-apks-and-haps.md)):
+
+- the APK gets its own OH bundle, named after its package, made from the unsigned host build `WL_HOST_BUILD` and
+  signed with OH's public development certificates (`bm install -r` keeps its uid and data);
+- OH's application manager asks Westlake's spawner for the process (`appspawn-x` on the `CJAppSpawn` socket, as for a
+  Cangjie app; the launch probe starts a router there), and the app attaches to OH as an OH app does;
+- SceneBoard gives the app its main window, lifecycle and input, so no touch forwarder runs.
+
+What it needs, besides the 6.1 setup above:
+
+- `WL_OH=7.0`, and `WL_BRIDGE_HEADERS` naming a header build of the 7.0 tree (OH include directories, IDL-generated
+  headers);
+- a westlake checkout of branch `oneplus-oh70` (`WL_WESTLAKE`): the bridge built against 7.0
+  (`native/bridge15-sources-oh70.json`), 7.0's session calls, and the spawner's admission without SELinux. The
+  framework and boot image (`WL_FRAMEWORK`, `WL_BOOT`) are built from the same checkout;
+- a manifest checkout with both the managed launch (`--managed`, `tools/make_managed_bundle.py`) and the touch options
+  (`WL_MANIFEST`);
+- `WL_HOST_BUILD`: the unsigned host build the host HAP is signed from.
+
+Run `01` to `04` as on 6.1 (`02` builds the spawner too), unlock the phone, then `06-managed.sh APP`. Unlock a minute
+or so after boot: an unlock while the system is still starting can block SceneBoard for 6 s, and OH then restarts it.
+
+Three things had to change for 7.0, and what happens without them:
+
+| | without it | fix |
+|---|---|---|
+| hmdfs on a RAM disk | the storage daemon cannot mount hmdfs on `/data` (tmpfs), user 100 is never unlocked, and SceneBoard refuses to start any app that is not a system app (`ERR_BLOCK_START_FIRST_BOOT_SCREEN_UNLOCK`) | `const.distributed_file_property.enabled=false` in the product's parameters (branch `oh-7.0`, vendor patch) |
+| no SELinux | the spawner admits OH's application manager by uid and SELinux context; this kernel has no SELinux, so it refused every spawn | westlake `oneplus-oh70`: where there is no selinuxfs, the uid alone admits it |
+| SceneBoard makes the window's node | 7.0 sends a node id at Connect, and SceneBoard creates the window's render node with it. The id of a node the app had made itself left two nodes under one id, and under partial rendering every frame was skipped: SceneBoard's blur stayed on screen | westlake `oneplus-oh70`: a fresh id; the app's content node hangs under a root node of its own, under SceneBoard's node. The root node also tells SceneBoard the first frame is there, so it removes the starting window |
+
