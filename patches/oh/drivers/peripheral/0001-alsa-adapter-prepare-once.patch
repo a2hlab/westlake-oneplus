@@ -1,0 +1,85 @@
+OH 7.0's ALSA adapter (audio supportlibs) prepares a stream more than once: alsa-lib's snd_pcm_hw_params prepares
+it, the HDI then calls its prepare (SndPcmPrepare), and the first capture read sets the hardware parameters again
+(CaptureCheckMmapMode), which prepares it a third time. Qualcomm's q6asm-dai closes and reopens its DSP stream on
+every prepare. For a capture stream, whose reads the first prepare already queued, that close times out
+("CMD 10bcd timeout", 5 s) and the DSP then rejects the stream's reads: no data.
+
+- SndPcmPrepare: nothing to do for a stream that is prepared already
+- CaptureCheckMmapMode: a stream that CaptureSetParams left prepared (or running) with read/write access keeps its
+  parameters, and is started unless it runs
+
+Playback was not affected (its close answers), but now also skips the close and reopen.
+
+diff --git a/audio/supportlibs/alsa_adapter/src/alsa_snd_capture.c b/audio/supportlibs/alsa_adapter/src/alsa_snd_capture.c
+index 82b0467..910bc9b 100755
+--- a/audio/supportlibs/alsa_adapter/src/alsa_snd_capture.c
++++ b/audio/supportlibs/alsa_adapter/src/alsa_snd_capture.c
+@@ -655,21 +655,42 @@ static int32_t CaptureCloseImpl(struct AlsaCapture *captureIns)
+     return HDF_SUCCESS;
+ }
+ 
++/* True when the stream is prepared or running with read/write access, as CaptureSetParams leaves it: setting the same
++ * parameters again prepares it again (see SndPcmPrepare in alsa_soundcard.c). */
++static bool CaptureSetUpForReads(struct AlsaSoundCard *cardIns)
++{
++    snd_pcm_state_t state = snd_pcm_state(cardIns->pcmHandle);
++    if (state != SND_PCM_STATE_PREPARED && state != SND_PCM_STATE_RUNNING) {
++        return false;
++    }
++    snd_pcm_hw_params_t *current = NULL;
++    snd_pcm_access_t access;
++    snd_pcm_hw_params_alloca(&current);
++    return snd_pcm_hw_params_current(cardIns->pcmHandle, current) == 0 &&
++        snd_pcm_hw_params_get_access(current, &access) == 0 && access == SND_PCM_ACCESS_RW_INTERLEAVED;
++}
++
+ static int32_t CaptureCheckMmapMode(struct AlsaSoundCard *cardIns)
+ {
+     CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns->pcmHandle);
+ 
+     if (!cardIns->mmapFlag) {
+-        int32_t ret = ResetCaptureParams(cardIns, SND_PCM_ACCESS_RW_INTERLEAVED);
+-        if (ret != HDF_SUCCESS) {
+-            AUDIO_FUNC_LOGE("AudioSetParamsMmap failed!");
+-            return ret;
++        int32_t ret;
++        if (!CaptureSetUpForReads(cardIns)) {
++            ret = ResetCaptureParams(cardIns, SND_PCM_ACCESS_RW_INTERLEAVED);
++            if (ret != HDF_SUCCESS) {
++                AUDIO_FUNC_LOGE("AudioSetParamsMmap failed!");
++                return ret;
++            }
+         }
+ 
+-        ret = snd_pcm_start(cardIns->pcmHandle);
+-        if (ret < 0) {
+-            AUDIO_FUNC_LOGE("snd_pcm_start fail. %{public}s", snd_strerror(ret));
+-            return HDF_FAILURE;
++        if (snd_pcm_state(cardIns->pcmHandle) != SND_PCM_STATE_RUNNING) {
++            ret = snd_pcm_start(cardIns->pcmHandle);
++            if (ret < 0) {
++                AUDIO_FUNC_LOGE("snd_pcm_start fail. %{public}s", snd_strerror(ret));
++                return HDF_FAILURE;
++            }
+         }
+         cardIns->mmapFlag = true;
+     }
+diff --git a/audio/supportlibs/alsa_adapter/src/alsa_soundcard.c b/audio/supportlibs/alsa_adapter/src/alsa_soundcard.c
+index ebc5de4..9794a05 100644
+--- a/audio/supportlibs/alsa_adapter/src/alsa_soundcard.c
++++ b/audio/supportlibs/alsa_adapter/src/alsa_soundcard.c
+@@ -563,6 +563,13 @@ int32_t SndConverAlsaPcmFormat(const struct AudioPcmHwParams *hwParams, snd_pcm_
+ int32_t SndPcmPrepare(struct AlsaSoundCard *cardIns)
+ {
+     CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns->pcmHandle);
++    /* snd_pcm_hw_params has prepared the stream already. Preparing again is not free on every driver: Qualcomm's
++     * q6asm-dai closes and reopens its DSP stream on each prepare, and for a capture stream with reads queued that
++     * close times out (5 s) and the stream then returns no data. */
++    if (snd_pcm_state(cardIns->pcmHandle) == SND_PCM_STATE_PREPARED) {
++        return HDF_SUCCESS;
++    }
+     int32_t ret = snd_pcm_prepare(cardIns->pcmHandle);
+     if (ret < 0) {
+         AUDIO_FUNC_LOGE("snd_pcm_prepare fail: %{public}s", snd_strerror(ret));

@@ -1,0 +1,1119 @@
+The board's ALSA hooks for OH 7.0's audio HDI (vendor/oneplus 0003 turns its ALSA mode on), written for the OnePlus 6.
+The port's audio_alsa files were the rk3568 templates (rk809 controls "Playback Path", "DACL Playback Volume"), so
+nothing could route sound on this card.
+
+- playback: MultiMedia1 (hw:0,0) to the quaternary MI2S port and the MAX98927 speaker amplifier
+  ("QUAT_MI2S_RX Audio Mixer MultiMedia1"); volume is the amplifier's "Speaker Volume" (0-6, set to 5 at init: it
+  resets to 0, silent); the headset path (WCD9340) is not set up, every output pin uses the speaker
+- capture: the main microphone, WCD9340 ADC3 through decimator 0 and SLIMbus TX0 into MultiMedia2 (hw:0,1);
+  "ADC3 Volume". q6asm gives each front end one DSP session, so a capture on MultiMedia1 fails while it plays
+  ("Audio Client already active"). CaptureGetSceneDev returns 0: the adapter takes the first device after it
+- routes are set in Init, which the adapter calls right after snd_pcm_open: its snd_pcm_hw_params also prepares the
+  stream, and a front end with no route fails prepare ("ASoC: no backend DAIs enabled for MultiMedia1"). They stay
+  on (DAPM powers a path only while a stream runs)
+- capture periods of 20 ms: the adapter reads one ALSA period per call and the HDI fails a read larger than the
+  caller's buffer; audio_server reads 40 ms at a time and the adapter's default period is 100 ms (capped at 16 KB)
+- signatures as OH 7.0's alsa_snd_render.h / alsa_snd_capture.h declare them; elements are looked up by name
+  (numid 0: SndElementItemInit leaves numid unset)
+
+Measured with tinyplay/tinycap: a 1 kHz tone on the speaker records at -18.6 dBFS on ADC3. Through OH (an OHAudio
+renderer and an OHAudio capturer, with drivers/peripheral 0001): -34.3 and -25.4 dBFS in two runs.
+
+diff --git a/fajita/audio_alsa/common.h b/fajita/audio_alsa/common.h
+index 9283a31..a08bb6c 100755
+--- a/fajita/audio_alsa/common.h
++++ b/fajita/audio_alsa/common.h
+@@ -1,63 +1,42 @@
+-/*
+- * Copyright (c) 2022 Huawei Device Co., Ltd.
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-#ifndef ALSA_SND_COMMON_H
+-#define ALSA_SND_COMMON_H
+-
+-/* Different scenarios correspond to different devices */
+-#define     SND_DEFAULT_PCM_DEV             (-1)
+-#define     SND_CALL_PCM_DEV                4
+-#define     SND_CALL_CAPTURE_DEV            "hw:0,5"
+-
+-/* Playback Path */
+-#define     SND_NUMID_PLAYBACK_PATH          1
+-#define     SND_ELEM_PLAYBACK_PATH           "Playback Path"
+-#define     SND_OUT_CARD_OFF                 "0"   /* close play path */
+-#define     SND_OUT_CARD_RCV                 "1"   /* speaker */
+-#define     SND_OUT_CARD_SPK                 "2"   /* speaker */
+-#define     SND_OUT_CARD_HP                  "3"   /* headphone */
+-#define     SND_OUT_CARD_HP_NO_MIC           "4"   /* headphone */
+-#define     SND_OUT_CARD_BT                  "5"   /* bluetooth (Don't set!!!) */
+-#define     SND_OUT_CARD_SPK_HP              "6"   /* speaker and headphone */
+-#define     SND_OUT_CARD_RING_SPK            "7"   /* speaker */
+-#define     SND_OUT_CARD_RING_HP             "8"   /* headphone */
+-#define     SND_OUT_CARD_RING_HP_NO_MIC      "9"        /* headphone */
+-#define     SND_OUT_CARD_RING_SPK_HP         "10"  /* speaker and headphone */
+-
+-/* Capture MIC Path */
+-#define     SND_NUMID_CAPUTRE_MIC_PATH       2
+-#define     SND_ELEM_CAPUTRE_MIC_PATH        "Capture MIC Path"
+-#define     SND_IN_CARD_MIC_OFF              "0"  /* close capture path */
+-#define     SND_IN_CARD_MAIN_MIC             "1"  /* main mic */
+-#define     SND_IN_CARD_HANDS_FREE_MIC       "2"  /* hands free mic */
+-#define     SND_IN_CARD_BT_SCO_MIC           "3"  /* bluetooth sco mic (Don't set!!!) */
+-
+-/* DACL Playback Volume  */
+-#define     SND_NUMID_DACL_PLAYBACK_VOL      3
+-#define     SND_ELEM_DACL_PLAYBACK_VOL       "DACL Playback Volume"
+-
+-/* DACR Playback Volume  */
+-#define     SND_NUMID_DACR_PLAYBACK_VOL      4
+-#define     SND_ELEM_DACR_PLAYBACK_VOL       "DACR Playback Volume"
+-
+-/* DACL Capture Volume  */
+-#define     SND_NUMID_DACL_CAPTURE_VOL       5
+-#define     SND_ELEM_DACL_CAPTURE_VOL        "DACL Capture Volume"
+-
+-/* DACR Capture Volume  */
+-#define     SND_NUMID_DACR_CAPTURE_VOL       6
+-#define     SND_ELEM_DACR_CAPTURE_VOL        "DACR Capture Volume"
+-
+-#endif /* ALSA_SND_COMMON_H */
++/*
++ * Copyright (c) 2022 Huawei Device Co., Ltd.
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef ALSA_SND_COMMON_H
++#define ALSA_SND_COMMON_H
++
++/*
++ * OnePlus 6 (SDM845): sound card "sdm845 - OnePlus 6" (ALSA id O6). OH's ALSA adapter plays and records on its
++ * first PCM device, hw:0,0, the DSP front end MultiMedia1. Elements are looked up by name (numid 0).
++ *
++ * Speaker: MAX98927 amplifier on the quaternary MI2S port. Main microphone: WCD9340 ADC3 over SLIMbus TX0.
++ * Measured with tinyplay/tinycap: a 1 kHz tone on the speaker records at -18.6 dBFS on ADC3.
++ */
++#define     SND_ELEM_SPEAKER_ROUTE          "QUAT_MI2S_RX Audio Mixer MultiMedia1"
++#define     SND_ELEM_SPEAKER_VOL            "Speaker Volume"     /* 0..6, amplifier gain */
++#define     SND_SPEAKER_VOL_DEFAULT         "5"
++#define     SND_ELEM_MIC_ROUTE              "MultiMedia2 Mixer SLIMBUS_0_TX"
++#define     SND_ELEM_MIC_VOL                "ADC3 Volume"
++#define     SND_MIC_VOL_DEFAULT             "12"
++#define     SND_SWITCH_ON                   "1"
++#define     SND_SWITCH_OFF                  "0"
++#define     SND_DEFAULT_PCM_DEV             (-1)   /* the card's first PCM device: hw:0,0, MultiMedia1 */
++/* Capture uses MultiMedia2 (hw:0,1): q6asm gives each front end one DSP session, so a capture on MultiMedia1 fails
++ * while it plays ("Audio Client already active"). The adapter takes the first device after the hook's number. */
++#define     SND_CAPTURE_PCM_DEV_BEFORE      0
++/* Capture periods (see CaptureInitImpl) */
++#define     SND_CAPTURE_PERIOD_US           20000
++#define     SND_CAPTURE_BUFFER_US           160000
++
++#endif /* ALSA_SND_COMMON_H */
+diff --git a/fajita/audio_alsa/vendor_capture.c b/fajita/audio_alsa/vendor_capture.c
+index 7bef1c9..8dc225b 100755
+--- a/fajita/audio_alsa/vendor_capture.c
++++ b/fajita/audio_alsa/vendor_capture.c
+@@ -1,237 +1,242 @@
+-/*
+- * Copyright (c) 2022 Huawei Device Co., Ltd.
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-#include "alsa_snd_capture.h"
+-#include "common.h"
+-
+-#define HDF_LOG_TAG HDF_AUDIO_HAL_CAPTURE
+-
+-typedef struct _CAPTURE_DATA_ {
+-    struct AlsaMixerCtlElement ctrlLeftVolume;
+-    struct AlsaMixerCtlElement ctrlRightVolume;
+-    long tempVolume;
+-}CaptureData;
+-
+-static int32_t CaptureInitImpl(struct AlsaCapture* captureIns)
+-{
+-    if (captureIns->priData != NULL) {
+-        return HDF_SUCCESS;
+-    }
+-    CHECK_NULL_PTR_RETURN_DEFAULT(captureIns);
+-
+-    CaptureData *priData = (CaptureData *)OsalMemCalloc(sizeof(CaptureData));
+-    if (priData == NULL) {
+-        AUDIO_FUNC_LOGE("Failed to allocate memory!");
+-        return HDF_FAILURE;
+-    }
+-
+-    SndElementItemInit(&priData->ctrlLeftVolume);
+-    SndElementItemInit(&priData->ctrlRightVolume);
+-    priData->ctrlLeftVolume.numid = SND_NUMID_DACL_CAPTURE_VOL;
+-    priData->ctrlLeftVolume.name = SND_ELEM_DACL_CAPTURE_VOL;
+-    priData->ctrlRightVolume.numid = SND_NUMID_DACR_CAPTURE_VOL;
+-    priData->ctrlRightVolume.name = SND_ELEM_DACR_CAPTURE_VOL;
+-    CaptureSetPriData(captureIns, (CapturePriData)priData);
+-
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t CaptureSelectSceneImpl(struct AlsaCapture *captureIns, const struct AudioHwCaptureParam *handleData) {
+-    captureIns->descPins = handleData->captureMode.hwInfo.deviceDescript.pins;
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t CaptureGetVolThresholdImpl(struct AlsaCapture *captureIns, long *volMin, long *volMax)
+-{
+-    int32_t ret;
+-    long _volMin = 0;
+-    long _volMax = 0;
+-    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)captureIns;
+-    CaptureData *priData = CaptureGetPriData(captureIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
+-
+-    ret = SndElementReadRange(cardIns, &priData->ctrlLeftVolume, &_volMin, &_volMax);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("SndElementReadRange fail!");
+-        return HDF_FAILURE;
+-    }
+-    *volMin = _volMin;
+-    *volMax = _volMax;
+-    
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t CaptureGetVolumeImpl(struct AlsaCapture *captureIns, long *volume)
+-{
+-    int32_t ret;
+-    long volLeft = 0;
+-    long volRight = 0;
+-    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)captureIns;
+-    CaptureData *priData = CaptureGetPriData(captureIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
+-
+-    ret = SndElementReadInt(cardIns, &priData->ctrlLeftVolume, &volLeft);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("Read left volume fail!");
+-        return HDF_FAILURE;
+-    }
+-    ret = SndElementReadInt(cardIns, &priData->ctrlRightVolume, &volRight);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("Read right volume fail!");
+-        return HDF_FAILURE;
+-    }
+-    *volume = (volLeft + volRight) >> 1;
+-    
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t CaptureSetVolumeImpl(struct AlsaCapture *captureIns, long volume)
+-{
+-    int32_t ret;
+-    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)captureIns;
+-    CaptureData *priData = CaptureGetPriData(captureIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
+-    ret = SndElementWriteInt(cardIns, &priData->ctrlLeftVolume, volume);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("Write left volume fail!");
+-        return HDF_FAILURE;
+-    }
+-    ret = SndElementWriteInt(cardIns, &priData->ctrlRightVolume, volume);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("Write right volume fail!");
+-        return HDF_FAILURE;
+-    }
+-
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t CaptureSetMuteImpl(struct AlsaCapture *captureIns, bool muteFlag)
+-{
+-    int32_t ret;
+-    long vol, setVol;
+-    CaptureData *priData = CaptureGetPriData(captureIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(captureIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
+-    ret = captureIns->GetVolume(captureIns, &vol);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("GetVolume failed!");
+-        return HDF_FAILURE;
+-    }
+-    
+-    if (muteFlag) {
+-        priData->tempVolume = vol;
+-        setVol = 0;
+-    } else {
+-        setVol = priData->tempVolume;
+-    }
+-    captureIns->SetVolume(captureIns, setVol);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("SetVolume failed!");
+-        return HDF_FAILURE;
+-    }
+-    captureIns->muteState = muteFlag;
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t CaptureStartImpl(struct AlsaCapture *captureIns, const struct AudioHwCaptureParam *handleData)
+-{
+-    struct AlsaMixerCtlElement mixerItem;
+-    CHECK_NULL_PTR_RETURN_DEFAULT(captureIns);
+-
+-    SndElementItemInit(&mixerItem);
+-    mixerItem.numid = SND_NUMID_CAPUTRE_MIC_PATH;
+-    mixerItem.name = SND_ELEM_CAPUTRE_MIC_PATH;
+-    mixerItem.value = SND_IN_CARD_MAIN_MIC;
+-    SndElementWrite(&captureIns->soundCard, &mixerItem);
+-    
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t CaptureStopImpl(struct AlsaCapture *captureIns)
+-{
+-    struct AlsaMixerCtlElement mixerItem;
+-    CHECK_NULL_PTR_RETURN_DEFAULT(captureIns);
+-
+-    SndElementItemInit(&mixerItem);
+-    mixerItem.numid = SND_NUMID_CAPUTRE_MIC_PATH;
+-    mixerItem.name = SND_ELEM_CAPUTRE_MIC_PATH;
+-    mixerItem.value = SND_IN_CARD_MIC_OFF;
+-    SndElementWrite(&captureIns->soundCard, &mixerItem);
+-    snd_pcm_drop(captureIns->soundCard.pcmHandle);
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t CaptureGetGainThresholdImpl(struct AlsaCapture *captureIns, float *gainMin, float *gainMax)
+-{
+-    AUDIO_FUNC_LOGE("8541e not support gain operation");
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t CaptureGetGainImpl(struct AlsaCapture *captureIns, float *volume)
+-{
+-    AUDIO_FUNC_LOGE("8541e not support gain operation");
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t CaptureSetGainImpl(struct AlsaCapture *captureIns, float volume)
+-{
+-    AUDIO_FUNC_LOGE("8541e not support gain operation");
+-    return HDF_SUCCESS;
+-}
+-
+-static bool CaptureGetMuteImpl(struct AlsaCapture *captureIns)
+-{
+-    return captureIns->muteState;
+-}
+-
+-int32_t CaptureOverrideFunc(struct AlsaCapture *captureIns)
+-{
+-    if (captureIns == NULL) {
+-        return HDF_FAILURE;
+-    }
+-    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)captureIns;
+-
+-    if (cardIns->cardType == SND_CARD_PRIMARY) {
+-        captureIns->Init = CaptureInitImpl;
+-        captureIns->SelectScene = CaptureSelectSceneImpl;
+-        captureIns->Start = CaptureStartImpl;
+-        captureIns->Stop = CaptureStopImpl;
+-        captureIns->GetVolThreshold = CaptureGetVolThresholdImpl;
+-        captureIns->GetVolume = CaptureGetVolumeImpl;
+-        captureIns->SetVolume = CaptureSetVolumeImpl;
+-        captureIns->GetGainThreshold = CaptureGetGainThresholdImpl;
+-        captureIns->GetGain = CaptureGetGainImpl;
+-        captureIns->SetGain = CaptureSetGainImpl;
+-        captureIns->GetMute = CaptureGetMuteImpl;
+-        captureIns->SetMute = CaptureSetMuteImpl;
+-    }
+-    
+-    return HDF_SUCCESS;
+-}
+-
+-int32_t CaptureGetSceneDev(enum AudioCategory scene)
+-{
+-    if (scene < AUDIO_IN_MEDIA || scene > AUDIO_MMAP_NOIRQ) {
+-        scene = AUDIO_IN_MEDIA;
+-    }
+-    if (scene == AUDIO_IN_CALL) {
+-        return SND_CALL_PCM_DEV;
+-    } else {
+-        return SND_DEFAULT_PCM_DEV;
+-    }
+-}
+\ No newline at end of file
++/*
++ * Copyright (c) 2022 Huawei Device Co., Ltd.
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/* OnePlus 6 capture hooks (OH 7.0 ALSA adapter): the main microphone, see common.h. Based on the rk3568 board's, with the hook
++ * signatures of OH 7.0's ALSA adapter (alsa_snd_capture.h). */
++
++#include "alsa_snd_capture.h"
++#include "common.h"
++
++#define HDF_LOG_TAG HDF_AUDIO_HAL_CAPTURE
++
++typedef struct _CAPTURE_DATA_ {
++    struct AlsaMixerCtlElement ctrlVolume;
++    long tempVolume;
++}CaptureData;
++
++/* WCD9340 main microphone (ADC3, decimator 0) to SLIMbus TX0, and SLIMBUS_0_TX into MultiMedia2 */
++static const struct {
++    const char *name;
++    const char *value;
++} g_micRoute[] = {
++    { "AIF1_CAP Mixer SLIM TX0", SND_SWITCH_ON },
++    { "CDC_IF TX0 MUX", "DEC0" },
++    { "ADC MUX0", "AMIC" },
++    { "AMIC MUX0", "ADC3" },
++    { "DEC0 Volume", "84" },
++    { SND_ELEM_MIC_ROUTE, SND_SWITCH_ON },
++};
++
++static void ElementByName(struct AlsaMixerCtlElement *elem, const char *name, const char *value)
++{
++    SndElementItemInit(elem);
++    elem->numid = 0;   /* look the element up by name */
++    elem->name = name;
++    elem->value = (char *)value;
++}
++
++static int32_t WriteElement(struct AlsaSoundCard *cardIns, const char *name, const char *value)
++{
++    struct AlsaMixerCtlElement elem;
++    ElementByName(&elem, name, value);
++    int32_t ret = SndElementWrite(cardIns, &elem);
++    if (ret != HDF_SUCCESS) {
++        AUDIO_FUNC_LOGE("write %{public}s = %{public}s failed", name, value);
++    }
++    return ret;
++}
++
++static int32_t CaptureRoute(struct AlsaCapture *captureIns)
++{
++    int32_t ret = HDF_SUCCESS;
++    for (size_t i = 0; i < sizeof(g_micRoute) / sizeof(g_micRoute[0]); i++) {
++        if (WriteElement(&captureIns->soundCard, g_micRoute[i].name, g_micRoute[i].value) != HDF_SUCCESS) {
++            ret = HDF_FAILURE;
++        }
++    }
++    return ret;
++}
++
++static int32_t CaptureInitImpl(struct AlsaCapture *captureIns)
++{
++    CHECK_NULL_PTR_RETURN_DEFAULT(captureIns);
++    /* the route goes in before the adapter's snd_pcm_hw_params, which also prepares the stream: a front end with
++     * no route fails prepare ("ASoC: no backend DAIs enabled for MultiMedia1"). It stays on: DAPM powers the path
++     * only while a stream runs */
++    (void)CaptureRoute(captureIns);
++    /* The adapter reads one ALSA period per call, and the HDI fails a read that is larger than the caller's buffer.
++     * audio_server reads 40 ms at a time and the adapter's default period is 100 ms (capped at 16 KB), so every
++     * read failed. 20 ms periods: audio_server collects two per read. */
++    captureIns->periodTime = SND_CAPTURE_PERIOD_US;
++    captureIns->bufferTime = SND_CAPTURE_BUFFER_US;
++    if (captureIns->priData != NULL) {
++        return HDF_SUCCESS;
++    }
++    CaptureData *priData = (CaptureData *)OsalMemCalloc(sizeof(CaptureData));
++    if (priData == NULL) {
++        AUDIO_FUNC_LOGE("Failed to allocate memory!");
++        return HDF_FAILURE;
++    }
++    ElementByName(&priData->ctrlVolume, SND_ELEM_MIC_VOL, NULL);
++    CaptureSetPriData(captureIns, (CapturePriData)priData);
++    (void)WriteElement((struct AlsaSoundCard *)captureIns, SND_ELEM_MIC_VOL, SND_MIC_VOL_DEFAULT);
++    return HDF_SUCCESS;
++}
++
++static int32_t CaptureSelectSceneImpl(struct AlsaCapture *captureIns, const struct AudioHwCaptureParam *handleData)
++{
++    CHECK_NULL_PTR_RETURN_DEFAULT(captureIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(handleData);
++    captureIns->descPins = handleData->captureMode.hwInfo.deviceDescript.pins;
++    return HDF_SUCCESS;
++}
++
++static int32_t CaptureGetVolThresholdImpl(struct AlsaCapture *captureIns, long *volMin, long *volMax)
++{
++    long min = 0;
++    long max = 0;
++    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)captureIns;
++    CaptureData *priData = CaptureGetPriData(captureIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
++    if (SndElementReadRange(cardIns, &priData->ctrlVolume, &min, &max) != HDF_SUCCESS) {
++        AUDIO_FUNC_LOGE("SndElementReadRange fail!");
++        return HDF_FAILURE;
++    }
++    *volMin = min;
++    *volMax = max;
++    return HDF_SUCCESS;
++}
++
++static int32_t CaptureGetVolumeImpl(struct AlsaCapture *captureIns, long *volume)
++{
++    long vol = 0;
++    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)captureIns;
++    CaptureData *priData = CaptureGetPriData(captureIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
++    if (SndElementReadInt(cardIns, &priData->ctrlVolume, &vol) != HDF_SUCCESS) {
++        AUDIO_FUNC_LOGE("Read volume fail!");
++        return HDF_FAILURE;
++    }
++    *volume = vol;
++    return HDF_SUCCESS;
++}
++
++static int32_t CaptureSetVolumeImpl(struct AlsaCapture *captureIns, long volume)
++{
++    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)captureIns;
++    CaptureData *priData = CaptureGetPriData(captureIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
++    if (SndElementWriteInt(cardIns, &priData->ctrlVolume, volume) != HDF_SUCCESS) {
++        AUDIO_FUNC_LOGE("Write volume fail!");
++        return HDF_FAILURE;
++    }
++    return HDF_SUCCESS;
++}
++
++static bool CaptureGetMuteImpl(struct AlsaCapture *captureIns)
++{
++    return captureIns->muteState;
++}
++
++static int32_t CaptureSetMuteImpl(struct AlsaCapture *captureIns, bool muteFlag)
++{
++    long vol = 0;
++    CaptureData *priData = CaptureGetPriData(captureIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(captureIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
++    if (captureIns->GetVolume(captureIns, &vol) != HDF_SUCCESS) {
++        AUDIO_FUNC_LOGE("GetVolume failed!");
++        return HDF_FAILURE;
++    }
++    long setVol;
++    if (muteFlag) {
++        priData->tempVolume = vol;
++        setVol = 0;
++    } else {
++        setVol = priData->tempVolume;
++    }
++    if (captureIns->SetVolume(captureIns, setVol) != HDF_SUCCESS) {
++        AUDIO_FUNC_LOGE("SetVolume failed!");
++        return HDF_FAILURE;
++    }
++    captureIns->muteState = muteFlag;
++    return HDF_SUCCESS;
++}
++
++static int32_t CaptureStartImpl(struct AlsaCapture *captureIns, const struct AudioHwCaptureParam *handleData)
++{
++    (void)handleData;
++    CHECK_NULL_PTR_RETURN_DEFAULT(captureIns);
++    return CaptureRoute(captureIns);
++}
++
++static int32_t CaptureStopImpl(struct AlsaCapture *captureIns)
++{
++    CHECK_NULL_PTR_RETURN_DEFAULT(captureIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(captureIns->soundCard.pcmHandle);
++    snd_pcm_drop(captureIns->soundCard.pcmHandle);
++    return HDF_SUCCESS;
++}
++
++static int32_t CaptureGetGainThresholdImpl(struct AlsaCapture *captureIns, float *gainMin, float *gainMax)
++{
++    AUDIO_FUNC_LOGI("Not support gain operation");
++    return HDF_SUCCESS;
++}
++
++static int32_t CaptureGetGainImpl(struct AlsaCapture *captureIns, float *volume)
++{
++    AUDIO_FUNC_LOGI("Not support gain operation");
++    return HDF_SUCCESS;
++}
++
++static int32_t CaptureSetGainImpl(struct AlsaCapture *captureIns, float volume)
++{
++    AUDIO_FUNC_LOGI("Not support gain operation");
++    return HDF_SUCCESS;
++}
++
++int32_t CaptureOverrideFunc(struct AlsaCapture *captureIns)
++{
++    if (captureIns == NULL) {
++        return HDF_FAILURE;
++    }
++    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)captureIns;
++    if (cardIns->cardType == SND_CARD_PRIMARY) {
++        captureIns->Init = CaptureInitImpl;
++        captureIns->SelectScene = CaptureSelectSceneImpl;
++        captureIns->Start = CaptureStartImpl;
++        captureIns->Stop = CaptureStopImpl;
++        captureIns->GetVolThreshold = CaptureGetVolThresholdImpl;
++        captureIns->GetVolume = CaptureGetVolumeImpl;
++        captureIns->SetVolume = CaptureSetVolumeImpl;
++        captureIns->GetGainThreshold = CaptureGetGainThresholdImpl;
++        captureIns->GetGain = CaptureGetGainImpl;
++        captureIns->SetGain = CaptureSetGainImpl;
++        captureIns->GetMute = CaptureGetMuteImpl;
++        captureIns->SetMute = CaptureSetMuteImpl;
++    }
++    return HDF_SUCCESS;
++}
++
++/* PCM device for a scene: MultiMedia2 for all (see common.h); this phone has no voice-call path */
++int32_t CaptureGetSceneDev(enum AudioCategory scene)
++{
++    (void)scene;
++    return SND_CAPTURE_PCM_DEV_BEFORE;
++}
+diff --git a/fajita/audio_alsa/vendor_render.c b/fajita/audio_alsa/vendor_render.c
+index aa955f8..bfef987 100755
+--- a/fajita/audio_alsa/vendor_render.c
++++ b/fajita/audio_alsa/vendor_render.c
+@@ -1,272 +1,226 @@
+-/*
+- * Copyright (c) 2022 Huawei Device Co., Ltd.
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-#include "alsa_snd_render.h"
+-#include "common.h"
+-
+-#define HDF_LOG_TAG HDF_AUDIO_HAL_RENDER
+-
+-typedef struct _RENDER_DATA_ {
+-    struct AlsaMixerCtlElement ctrlLeftVolume;
+-    struct AlsaMixerCtlElement ctrlRightVolume;
+-    long tempVolume;
+-}RenderData;
+-
+-static int32_t RenderInitImpl(struct AlsaRender *renderIns)
+-{
+-    if (renderIns->priData != NULL) {
+-        return HDF_SUCCESS;
+-    }
+-    CHECK_NULL_PTR_RETURN_DEFAULT(renderIns);
+-
+-    RenderData *priData = (RenderData *)OsalMemCalloc(sizeof(RenderData));
+-    if (priData == NULL) {
+-        AUDIO_FUNC_LOGE("Failed to allocate memory!");
+-        return HDF_FAILURE;
+-    }
+-
+-    SndElementItemInit(&priData->ctrlLeftVolume);
+-    SndElementItemInit(&priData->ctrlRightVolume);
+-    priData->ctrlLeftVolume.numid = SND_NUMID_DACL_PLAYBACK_VOL;
+-    priData->ctrlLeftVolume.name = SND_ELEM_DACL_PLAYBACK_VOL;
+-    priData->ctrlRightVolume.numid = SND_NUMID_DACR_PLAYBACK_VOL;
+-    priData->ctrlRightVolume.name = SND_ELEM_DACR_PLAYBACK_VOL;
+-    RenderSetPriData(renderIns, (RenderPriData)priData);
+-
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t RenderSelectSceneImpl(struct AlsaRender *renderIns, const struct AudioHwRenderParam *handleData)
+-{
+-    renderIns->descPins = handleData->renderMode.hwInfo.deviceDescript.pins;
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t RenderGetVolThresholdImpl(struct AlsaRender *renderIns, long *volMin, long *volMax)
+-{
+-    int32_t ret;
+-    long _volMin = 0;
+-    long _volMax = 0;
+-    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)renderIns;
+-    RenderData *priData = RenderGetPriData(renderIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
+-
+-    ret = SndElementReadRange(cardIns, &priData->ctrlLeftVolume, &_volMin, &_volMax);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("SndElementReadRange fail!");
+-        return HDF_FAILURE;
+-    }
+-    *volMin = _volMin;
+-    *volMax = _volMax;
+-    
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t RenderGetVolumeImpl(struct AlsaRender *renderIns, long *volume)
+-{
+-    int32_t ret;
+-    long volLeft = 0;
+-    long volRight = 0;
+-    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)renderIns;
+-    RenderData *priData = RenderGetPriData(renderIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
+-
+-    ret = SndElementReadInt(cardIns, &priData->ctrlLeftVolume, &volLeft);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("Read left volume fail!");
+-        return HDF_FAILURE;
+-    }
+-    ret = SndElementReadInt(cardIns, &priData->ctrlRightVolume, &volRight);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("Read right volume fail!");
+-        return HDF_FAILURE;
+-    }
+-    *volume = (volLeft + volRight) >> 1;
+-
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t RenderSetVolumeImpl(struct AlsaRender *renderIns, long volume)
+-{
+-    int32_t ret;
+-    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)renderIns;
+-    RenderData *priData = RenderGetPriData(renderIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
+-
+-    ret = SndElementWriteInt(cardIns, &priData->ctrlLeftVolume, volume);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("Write left volume fail!");
+-        return HDF_FAILURE;
+-    }
+-    ret = SndElementWriteInt(cardIns, &priData->ctrlRightVolume, volume);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("Write right volume fail!");
+-        return HDF_FAILURE;
+-    }
+-    
+-    return HDF_SUCCESS;
+-}
+-
+-static bool RenderGetMuteImpl(struct AlsaRender *renderIns)
+-{
+-    return renderIns->muteState;
+-}
+-
+-static int32_t RenderSetMuteImpl(struct AlsaRender *renderIns, bool muteFlag)
+-{
+-    int32_t ret;
+-    long vol, setVol;
+-    RenderData *priData = RenderGetPriData(renderIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(renderIns);
+-    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
+-
+-    ret = renderIns->GetVolume(renderIns, &vol);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("GetVolume failed!");
+-        return HDF_FAILURE;
+-    }
+-    
+-    if (muteFlag) {
+-        priData->tempVolume = vol;
+-        setVol = 0;
+-    } else {
+-        setVol = priData->tempVolume;
+-    }
+-    
+-    renderIns->SetVolume(renderIns, setVol);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("SetVolume failed!");
+-        return HDF_FAILURE;
+-    }
+-    renderIns->muteState = muteFlag;
+-    
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t RenderStartImpl(struct AlsaRender *renderIns, const struct AudioHwRenderParam *handleData)
+-{
+-    int32_t ret;
+-    struct AlsaMixerCtlElement elem;
+-    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)renderIns;
+-
+-    SndElementItemInit(&elem);
+-    elem.numid = SND_NUMID_PLAYBACK_PATH;
+-    elem.name = SND_ELEM_PLAYBACK_PATH;
+-    switch (renderIns->descPins) {
+-        case PIN_OUT_SPEAKER:
+-            elem.value = SND_OUT_CARD_SPK_HP;
+-            break;
+-        case PIN_OUT_HEADSET:
+-            elem.value = SND_OUT_CARD_HP;
+-            break;
+-        default:
+-            elem.value = SND_OUT_CARD_SPK_HP;
+-    }
+-
+-    ret = SndElementWrite(cardIns, &elem);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("write render fail!");
+-        return HDF_FAILURE;
+-    }
+-
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t RenderStopImpl(struct AlsaRender *renderIns)
+-{
+-    int32_t ret;
+-    struct AlsaMixerCtlElement elem;
+-    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)renderIns;
+-
+-    SndElementItemInit(&elem);
+-    elem.numid = SND_NUMID_PLAYBACK_PATH;
+-    elem.name = SND_ELEM_PLAYBACK_PATH;
+-    elem.value = SND_OUT_CARD_OFF;
+-    ret = SndElementWrite(cardIns, &elem);
+-    if (ret != HDF_SUCCESS) {
+-        AUDIO_FUNC_LOGE("write render fail!");
+-        return HDF_FAILURE;
+-    }
+-
+-    snd_pcm_drain(renderIns->soundCard.pcmHandle);
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t RenderGetGainThresholdImpl(struct AlsaRender *renderIns, float *gainMin, float *gainMax)
+-{
+-    AUDIO_FUNC_LOGI("Not support gain operation");
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t RenderGetGainImpl(struct AlsaRender *renderIns, float *volume)
+-{
+-    AUDIO_FUNC_LOGI("Not support gain operation");
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t RenderSetGainImpl(struct AlsaRender *renderIns, float volume)
+-{
+-    AUDIO_FUNC_LOGI("Not support gain operation");
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t RenderGetChannelModeImpl(struct AlsaRender *renderIns, enum AudioChannelMode *mode)
+-{
+-    return HDF_SUCCESS;
+-}
+-
+-static int32_t RenderSetChannelModeImpl(struct AlsaRender *renderIns, enum AudioChannelMode mode)
+-{
+-    return HDF_SUCCESS;
+-}
+-
+-int32_t RenderOverrideFunc(struct AlsaRender *renderIns)
+-{
+-    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)renderIns;
+-
+-    if (cardIns->cardType == SND_CARD_PRIMARY) {
+-        renderIns->Init = RenderInitImpl;
+-        renderIns->SelectScene = RenderSelectSceneImpl;
+-        renderIns->Start = RenderStartImpl;
+-        renderIns->Stop = RenderStopImpl;
+-        renderIns->GetVolThreshold = RenderGetVolThresholdImpl;
+-        renderIns->GetVolume = RenderGetVolumeImpl;
+-        renderIns->SetVolume = RenderSetVolumeImpl;
+-        renderIns->GetGainThreshold = RenderGetGainThresholdImpl;
+-        renderIns->GetGain = RenderGetGainImpl;
+-        renderIns->SetGain = RenderSetGainImpl;
+-        renderIns->GetMute = RenderGetMuteImpl;
+-        renderIns->SetMute = RenderSetMuteImpl;
+-        renderIns->GetChannelMode = RenderGetChannelModeImpl;
+-        renderIns->SetChannelMode = RenderSetChannelModeImpl;
+-    }
+-
+-    return HDF_SUCCESS;
+-}
+-
+-int32_t RenderGetSceneDev(enum AudioCategory scene)
+-{
+-    if (scene < AUDIO_IN_MEDIA || scene > AUDIO_MMAP_NOIRQ) {
+-        scene = AUDIO_IN_MEDIA;
+-    }
+-    if (scene == AUDIO_IN_CALL) {
+-        return SND_CALL_PCM_DEV;
+-    } else {
+-        return SND_DEFAULT_PCM_DEV;
+-    }
+-}
++/*
++ * Copyright (c) 2022 Huawei Device Co., Ltd.
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/* OnePlus 6 render hooks (OH 7.0 ALSA adapter): the speaker, see common.h. Based on the rk3568 board's file, with
++ * the hook signatures of OH 7.0's ALSA adapter (alsa_snd_render.h). */
++
++#include "alsa_snd_render.h"
++#include "common.h"
++
++#define HDF_LOG_TAG HDF_AUDIO_HAL_RENDER
++
++typedef struct _RENDER_DATA_ {
++    struct AlsaMixerCtlElement ctrlVolume;
++    long tempVolume;
++}RenderData;
++
++static void ElementByName(struct AlsaMixerCtlElement *elem, const char *name, const char *value)
++{
++    SndElementItemInit(elem);
++    elem->numid = 0;   /* look the element up by name */
++    elem->name = name;
++    elem->value = (char *)value;
++}
++
++static int32_t WriteElement(struct AlsaSoundCard *cardIns, const char *name, const char *value)
++{
++    struct AlsaMixerCtlElement elem;
++    ElementByName(&elem, name, value);
++    int32_t ret = SndElementWrite(cardIns, &elem);
++    if (ret != HDF_SUCCESS) {
++        AUDIO_FUNC_LOGE("write %{public}s = %{public}s failed", name, value);
++    }
++    return ret;
++}
++
++static int32_t RenderInitImpl(struct AlsaRender *renderIns)
++{
++    CHECK_NULL_PTR_RETURN_DEFAULT(renderIns);
++    /* the route goes in before the adapter's snd_pcm_hw_params, which also prepares the stream: a front end with
++     * no route fails prepare ("ASoC: no backend DAIs enabled for MultiMedia1"). It stays on: DAPM powers the path
++     * only while a stream runs */
++    (void)WriteElement((struct AlsaSoundCard *)renderIns, SND_ELEM_SPEAKER_ROUTE, SND_SWITCH_ON);
++    if (renderIns->priData != NULL) {
++        return HDF_SUCCESS;
++    }
++    RenderData *priData = (RenderData *)OsalMemCalloc(sizeof(RenderData));
++    if (priData == NULL) {
++        AUDIO_FUNC_LOGE("Failed to allocate memory!");
++        return HDF_FAILURE;
++    }
++    ElementByName(&priData->ctrlVolume, SND_ELEM_SPEAKER_VOL, NULL);
++    RenderSetPriData(renderIns, (RenderPriData)priData);
++    /* the amplifier resets to gain 0 (silent); OH scales stream volume itself */
++    (void)WriteElement((struct AlsaSoundCard *)renderIns, SND_ELEM_SPEAKER_VOL, SND_SPEAKER_VOL_DEFAULT);
++    return HDF_SUCCESS;
++}
++
++static int32_t RenderSelectSceneImpl(struct AlsaRender *renderIns, const struct AudioHwRenderParam *handleData)
++{
++    CHECK_NULL_PTR_RETURN_DEFAULT(renderIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(handleData);
++    renderIns->descPins = handleData->renderMode.hwInfo.deviceDescript.pins;
++    return HDF_SUCCESS;
++}
++
++static int32_t RenderGetVolThresholdImpl(struct AlsaRender *renderIns, long *volMin, long *volMax)
++{
++    long min = 0;
++    long max = 0;
++    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)renderIns;
++    RenderData *priData = RenderGetPriData(renderIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
++    if (SndElementReadRange(cardIns, &priData->ctrlVolume, &min, &max) != HDF_SUCCESS) {
++        AUDIO_FUNC_LOGE("SndElementReadRange fail!");
++        return HDF_FAILURE;
++    }
++    *volMin = min;
++    *volMax = max;
++    return HDF_SUCCESS;
++}
++
++static int32_t RenderGetVolumeImpl(struct AlsaRender *renderIns, long *volume)
++{
++    long vol = 0;
++    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)renderIns;
++    RenderData *priData = RenderGetPriData(renderIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
++    if (SndElementReadInt(cardIns, &priData->ctrlVolume, &vol) != HDF_SUCCESS) {
++        AUDIO_FUNC_LOGE("Read volume fail!");
++        return HDF_FAILURE;
++    }
++    *volume = vol;
++    return HDF_SUCCESS;
++}
++
++static int32_t RenderSetVolumeImpl(struct AlsaRender *renderIns, long volume)
++{
++    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)renderIns;
++    RenderData *priData = RenderGetPriData(renderIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(cardIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
++    if (SndElementWriteInt(cardIns, &priData->ctrlVolume, volume) != HDF_SUCCESS) {
++        AUDIO_FUNC_LOGE("Write volume fail!");
++        return HDF_FAILURE;
++    }
++    return HDF_SUCCESS;
++}
++
++static bool RenderGetMuteImpl(struct AlsaRender *renderIns)
++{
++    return renderIns->muteState;
++}
++
++static int32_t RenderSetMuteImpl(struct AlsaRender *renderIns, bool muteFlag)
++{
++    long vol = 0;
++    RenderData *priData = RenderGetPriData(renderIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(renderIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(priData);
++    if (renderIns->GetVolume(renderIns, &vol) != HDF_SUCCESS) {
++        AUDIO_FUNC_LOGE("GetVolume failed!");
++        return HDF_FAILURE;
++    }
++    long setVol;
++    if (muteFlag) {
++        priData->tempVolume = vol;
++        setVol = 0;
++    } else {
++        setVol = priData->tempVolume;
++    }
++    if (renderIns->SetVolume(renderIns, setVol) != HDF_SUCCESS) {
++        AUDIO_FUNC_LOGE("SetVolume failed!");
++        return HDF_FAILURE;
++    }
++    renderIns->muteState = muteFlag;
++    return HDF_SUCCESS;
++}
++
++static int32_t RenderStartImpl(struct AlsaRender *renderIns, const struct AudioHwRenderParam *handleData)
++{
++    (void)handleData;
++    CHECK_NULL_PTR_RETURN_DEFAULT(renderIns);
++    /* the speaker for every output pin: the headset path (WCD9340) is not set up yet */
++    return WriteElement((struct AlsaSoundCard *)renderIns, SND_ELEM_SPEAKER_ROUTE, SND_SWITCH_ON);
++}
++
++static int32_t RenderStopImpl(struct AlsaRender *renderIns)
++{
++    CHECK_NULL_PTR_RETURN_DEFAULT(renderIns);
++    CHECK_NULL_PTR_RETURN_DEFAULT(renderIns->soundCard.pcmHandle);
++    snd_pcm_drain(renderIns->soundCard.pcmHandle);
++    return HDF_SUCCESS;
++}
++
++static int32_t RenderGetGainThresholdImpl(struct AlsaRender *renderIns, float *gainMin, float *gainMax)
++{
++    AUDIO_FUNC_LOGI("Not yet realized");
++    return HDF_SUCCESS;
++}
++
++static int32_t RenderGetGainImpl(struct AlsaRender *renderIns, float *volume)
++{
++    AUDIO_FUNC_LOGI("Not yet realized");
++    return HDF_SUCCESS;
++}
++
++static int32_t RenderSetGainImpl(struct AlsaRender *renderIns, float volume)
++{
++    AUDIO_FUNC_LOGI("Not yet realized");
++    return HDF_SUCCESS;
++}
++
++static int32_t RenderGetChannelModeImpl(struct AlsaRender *renderIns, enum AudioChannelMode *mode)
++{
++    return HDF_SUCCESS;
++}
++
++static int32_t RenderSetChannelModeImpl(struct AlsaRender *renderIns, enum AudioChannelMode mode)
++{
++    return HDF_SUCCESS;
++}
++
++int32_t RenderOverrideFunc(struct AlsaRender *renderIns)
++{
++    struct AlsaSoundCard *cardIns = (struct AlsaSoundCard *)renderIns;
++
++    if (cardIns->cardType == SND_CARD_PRIMARY) {
++        renderIns->Init = RenderInitImpl;
++        renderIns->SelectScene = RenderSelectSceneImpl;
++        renderIns->Start = RenderStartImpl;
++        renderIns->Stop = RenderStopImpl;
++        renderIns->GetVolThreshold = RenderGetVolThresholdImpl;
++        renderIns->GetVolume = RenderGetVolumeImpl;
++        renderIns->SetVolume = RenderSetVolumeImpl;
++        renderIns->GetGainThreshold = RenderGetGainThresholdImpl;
++        renderIns->GetGain = RenderGetGainImpl;
++        renderIns->SetGain = RenderSetGainImpl;
++        renderIns->GetMute = RenderGetMuteImpl;
++        renderIns->SetMute = RenderSetMuteImpl;
++        renderIns->GetChannelMode = RenderGetChannelModeImpl;
++        renderIns->SetChannelMode = RenderSetChannelModeImpl;
++    }
++
++    return HDF_SUCCESS;
++}
++
++/* PCM device for a scene: the first one (MultiMedia1) for all; this phone has no voice-call path */
++int32_t RenderGetSceneDev(enum AudioCategory scene)
++{
++    (void)scene;
++    return SND_DEFAULT_PCM_DEV;
++}

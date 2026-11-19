@@ -1,0 +1,297 @@
+Audio through ALSA: OH's audio HDI in its ALSA mode (drivers_peripheral_audio_feature_alsa_lib) with the board's
+hooks (device/board/oneplus 0005), alsa-lib with its configuration files (alsa_lib_feature_config_enable: without
+it alsa-lib loads no configuration and cannot open "hw:0"), and alsa_adapter.json naming the OnePlus 6's card
+(ALSA id O6, card 0) as the primary adapter. The port's files were the rk3568 templates (card rockchiprk809co,
+ADM mode), so OH had no working audio at all.
+
+audio_policy_config.xml: OH 7.0's policy reads the version 2.0 format (adapters, pipes, devices); the port's file
+was the 1.0 format (deviceclass/modules), so the policy never opened the primary output ("adapter primary is
+nullptr", "can not find sink Speaker"). This is the rk3568 7.0 file with the primary pipes at 48 kHz.
+
+alsa-lib's configuration on the vendor side: libasound reads /vendor/etc/audio/alsa/share (ALSA_CONFIG_DIR in
+third_party/alsa-lib include/config.h), but alsa-lib's own prebuilt targets install alsa.conf and the rest into the
+system image (/system/etc/audio/alsa/share), so with alsa_lib_feature_config_enable alone it still found no
+configuration. The product installs alsa.conf and smixer.conf where libasound looks.
+
+diff --git a/fajita/config.json b/fajita/config.json
+index 7da02bc..15e87b3 100755
+--- a/fajita/config.json
++++ b/fajita/config.json
+@@ -125,7 +125,7 @@
+           "features": [
+             "drivers_peripheral_audio_feature_community = true",
+             "drivers_peripheral_audio_feature_full_test_suite = false",
+-            "drivers_peripheral_audio_feature_alsa_lib = false",
++            "drivers_peripheral_audio_feature_alsa_lib = true",
+             "drivers_peripheral_audio_feature_effect = false"
+           ]
+         },
+@@ -275,7 +275,9 @@
+         },
+         {
+           "component": "alsa-lib",
+-          "features": []
++          "features": [
++            "alsa_lib_feature_config_enable = true"
++          ]
+         },
+         {
+           "component": "expat",
+diff --git a/fajita/hals/audio/BUILD.gn b/fajita/hals/audio/BUILD.gn
+index 130cb28..3df1af5 100644
+--- a/fajita/hals/audio/BUILD.gn
++++ b/fajita/hals/audio/BUILD.gn
+@@ -31,6 +31,32 @@ ohos_prebuilt_etc("hdf_audio_path_json") {
+   part_name = "product_fajita"
+ }
+ 
++ohos_prebuilt_etc("hdf_alsa_adapter_json") {
++  source = "alsa_adapter.json"
++  relative_install_dir = "hdfconfig"
++  install_images = [ chipset_base_dir ]
++  subsystem_name = "hdf"
++  part_name = "product_fajita"
++}
++
++# alsa-lib reads its configuration from /vendor/etc/audio/alsa/share (third_party/alsa-lib include/config.h) but
++# installs its files into the system image: the two it needs, on the vendor side
++ohos_prebuilt_etc("fajita_alsa_conf") {
++  source = "//third_party/alsa-lib/src/conf/alsa.conf"
++  relative_install_dir = "audio/alsa/share"
++  install_images = [ chipset_base_dir ]
++  subsystem_name = "hdf"
++  part_name = "product_fajita"
++}
++
++ohos_prebuilt_etc("fajita_alsa_smixer_conf") {
++  source = "//third_party/alsa-lib/src/conf/smixer.conf"
++  relative_install_dir = "audio/alsa/share"
++  install_images = [ chipset_base_dir ]
++  subsystem_name = "hdf"
++  part_name = "product_fajita"
++}
++
+ ohos_prebuilt_etc("audio_policy_config") {
+   if (target_cpu == "arm64") {
+     source = "config/arm64/audio_policy_config.xml"
+@@ -46,6 +72,9 @@ ohos_prebuilt_etc("audio_policy_config") {
+ group("hdf_audio_config") {
+   deps = [
+     ":audio_policy_config",
++    ":hdf_alsa_adapter_json",
++    ":fajita_alsa_conf",
++    ":fajita_alsa_smixer_conf",
+     ":hdf_audio_effect_json",
+     ":hdf_audio_path_json",
+   ]
+diff --git a/fajita/hals/audio/alsa_adapter.json b/fajita/hals/audio/alsa_adapter.json
+index 4f27200..58b4030 100644
+--- a/fajita/hals/audio/alsa_adapter.json
++++ b/fajita/hals/audio/alsa_adapter.json
+@@ -2,31 +2,8 @@
+     "adapters": [
+         {
+             "name": "primary",
+-            "cardId": "rockchiprk809co",
+-            "daiId": "",
+-            "simple_mixer_ctl_volume": {
+-                "playback": [
+-                    {
+-                        "name": "DACL"
+-                    },
+-                    {
+-                        "name": "DACR"
+-                    }
+-                ],
+-                "capture": [
+-                    {
+-                        "name": "DACL"
+-                    },
+-                    {
+-                        "name": "DACR"
+-                    }
+-                ]
+-            }
+-        },
+-        {
+-            "name": "hdmi",
+-            "cardId": "rockchiphdmi",
+-            "daiId": ""
++            "cardId": 0,
++            "cardName": "O6"
+         }
+     ]
+-}
+\ No newline at end of file
++}
+diff --git a/fajita/hals/audio/config/arm64/audio_policy_config.xml b/fajita/hals/audio/config/arm64/audio_policy_config.xml
+index d656299..c9f2ab8 100644
+--- a/fajita/hals/audio/config/arm64/audio_policy_config.xml
++++ b/fajita/hals/audio/config/arm64/audio_policy_config.xml
+@@ -1,6 +1,5 @@
+ <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+-<!-- Copyright (c) 2021-2022 Huawei Device Co., Ltd.
+-
++<!-- Copyright (c) 2021-2024 Huawei Device Co., Ltd.
+      Licensed under the Apache License, Version 2.0 (the "License");
+      you may not use this file except in compliance with the License.
+      You may obtain a copy of the License at
+@@ -13,59 +12,109 @@
+      See the License for the specific language governing permissions and
+      limitations under the License.
+ -->
+-<audioPolicyConfiguration version="1.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+-    <deviceclass name="primary">
+-        <modules>
+-            <module name="Speaker" lib="libmodule-hdi-sink.z.so" role="sink" channels="2" rate="44100"  buffer_size="4096">
+-                <Ports>
+-                    <Port adapter_name="primary" id="0" channels="2" rate="44100" buffer_size="4096" fixed_latency="1" render_in_idle_state="1" open_mic_speaker="0"/>
+-                </Ports>
+-            </module>
+-            <module name="Built_in_mic" lib="libmodule-hdi-source.z.so" role="source" channels="2" rate="44100" format="s16be" buffer_size="8192">
+-                <Ports>
+-                    <Port adapter_name="primary" id="0" channels="2" rate="44100" buffer_size="8192" open_mic_speaker="0"/>
+-                </Ports>
+-            </module>
+-        </modules>
+-    </deviceclass>
+-    <deviceclass name="a2dp">
+-        <modules>
+-            <module name="Bt_Speaker" lib="libmodule-hdi-sink.z.so" role="sink" channels="2" rate="48000" buffer_size="3840">
+-                <Ports>
+-                    <Port adapter_name="bt_a2dp" id="0" channels="2" rate="48000" buffer_size="3840"/>
+-                </Ports>
+-            </module>
+-        </modules>
+-    </deviceclass>
+-    <deviceclass name="file_io">
+-        <modules>
+-            <module name="file_sink" lib="libmodule-hdi-sink.z.so" role="sink" channels="8" rate="48000" buffer_size="3840" file="/data/data/.pulse_dir/file_sink.pcm">
+-                <Ports>
+-                    <Port id="0" channels="8" rate="48000" buffer_size="3840"/>
+-                </Ports>
+-            </module>
+-            <module name="file_source" lib="libmodule-hdi-source.z.so" role="source" channels="6" rate="48000" buffer_size="3840" file="/data/data/.pulse_dir/file_source.pcm">
+-                <Ports>
+-                    <Port id="0" channels="6" rate="48000" buffer_size="3840"/>
+-                </Ports>
+-            </module>
+-        </modules>
+-    </deviceclass>
+-    <AudioInterruptEnable>true</AudioInterruptEnable>
+-    <UpdateRouteSupport>false</UpdateRouteSupport>
+-    <AudioLatency>90</AudioLatency>
+-    <VolumeGroupConfig>
++<audioPolicyConfiguration xmlns:xi="http://www.w3.org/2001/XInclude" version="2.0">
++    <adapters>
++        <adapter name="primary" supportSelectScene="0">
++            <pipes>
++                <pipe name="primary_output" role="output">
++                    <paProp lib="libmodule-hdi-sink.z.so" role="sink" fixed_latency="1" render_in_idle_state="1" moduleName="Speaker"/>
++                    <streamProps>
++                        <streamProp format="s16le" sampleRates="48000" channelLayout="CH_LAYOUT_STEREO" bufferSize="3840" supportDevices="Speaker_Out, Wired_Headset_Out, Wired_Headphones_Out"/>
++                    </streamProps>
++                    <attributes>
++                        <attribute name="preload" value="true"/>
++                        <attribute name="flag" value="AUDIO_OUTPUT_FLAG_NORMAL"/>
++                    </attributes>
++                </pipe>
++                <pipe name="primary_input" role="input">
++                    <paProp lib="libmodule-hdi-source.z.so" role="source" moduleName="Built_in_mic"/>
++                    <streamProps>
++                        <streamProp format="s16le" sampleRates="48000" channelLayout="CH_LAYOUT_STEREO" bufferSize="7680" supportDevices="Builtin_Mic_In, Wired_Headset_In"/>
++                    </streamProps>
++                    <attributes>
++                        <attribute name="flag" value="AUDIO_INPUT_FLAG_NORMAL"/>
++                    </attributes>
++                </pipe>
++            </pipes>
++            <devices>
++                <device name="Speaker_Out" type="DEVICE_TYPE_SPEAKER" pin="PIN_OUT_SPEAKER" role="output" supportPipes="primary_output"/>
++                <device name="Wired_Headset_Out" type="DEVICE_TYPE_WIRED_HEADSET" pin="PIN_OUT_HEADSET" role="output" supportPipes="primary_output"/>
++                <device name="Wired_Headphones_Out" type="DEVICE_TYPE_WIRED_HEADPHONES" pin="PIN_OUT_HEADPHONE" role="output" supportPipes="primary_output"/>
++                <device name="Builtin_Mic_In" type="DEVICE_TYPE_MIC" pin="PIN_IN_MIC" role="input" supportPipes="primary_input"/>
++                <device name="Wired_Headset_In" type="DEVICE_TYPE_WIRED_HEADSET" pin="PIN_IN_HS_MIC" role="input" supportPipes="primary_input"/>
++            </devices>
++        </adapter>
++        <adapter name="a2dp">
++            <pipes>
++                <pipe name="a2dp_output" role="output">
++                    <paProp lib="libmodule-hdi-sink.z.so" role="sink" moduleName="Bt_Speaker"/>
++                    <streamProps>
++                        <streamProp format="s16le" sampleRates="48000" channelLayout="CH_LAYOUT_STEREO" buffer_size="3840" supportDevices="Bt_A2dp_Out"/>
++                        <streamProp format="s16le" sampleRates="44100" channelLayout="CH_LAYOUT_STEREO" buffer_size="3528" supportDevices="Bt_A2dp_Out"/>
++                        <streamProp format="s24le" sampleRates="96000" channelLayout="CH_LAYOUT_STEREO" buffer_size="11520" supportDevices="Bt_A2dp_Out"/>
++                    </streamProps>
++                    <attributes>
++                        <attribute name="flag" value="AUDIO_OUTPUT_FLAG_NORMAL"/>
++                    </attributes>
++                </pipe>
++            </pipes>
++            <devices>
++                <device name="Bt_A2dp_Out" type="DEVICE_TYPE_BLUETOOTH_A2DP" pin="PIN_OUT_BLUETOOTH_A2DP" role="output" supportPipes="a2dp_output"/>
++            </devices>
++        </adapter>
++        <adapter name="remote" supportSelectScene="0">
++            <pipes>
++                <pipe name="distributed_output" role="output">
++                    <paProp lib="libmodule-hdi-sink.z.so" role="sink" moduleName="Speaker"/>
++                    <streamProps>
++                        <streamProp format="s16le" sampleRates="48000" channelLayout="CH_LAYOUT_STEREO" bufferSize="3840" supportDevices="Distributed_Out"/>
++                    </streamProps>
++                    <attributes>
++                        <attribute name="flag" value="AUDIO_OUTPUT_FLAG_NORMAL"/>
++                    </attributes>
++                </pipe>
++                <pipe name="distributed_input" role="input">
++                    <paProp lib="libmodule-hdi-source.z.so" role="source" moduleName="Built_in_mic"/>            
++                    <streamProps>
++                        <streamProp format="s16le" sampleRates="48000" channelLayout="CH_LAYOUT_STEREO" bufferSize="3840" supportDevices="Distributed_In"/>
++                    </streamProps>
++                    <attributes>
++                        <attribute name="flag" value="AUDIO_INPUT_FLAG_NORMAL"/>
++                    </attributes>
++                </pipe>
++            </pipes>
++            <devices>
++                <device name="Distributed_Out" type="DEVICE_TYPE_SPEAKER" pin="PIN_OUT_DAUDIO_DEFAULT" role="output" supportPipes="distributed_output"/>
++                <device name="Distributed_In" type="DEVICE_TYPE_MIC" pin="PIN_IN_DAUDIO_DEFAULT" role="input" supportPipes="distributed_input"/>
++            </devices>
++        </adapter>
++    </adapters>
++    <volumeGroups>
+         <groups>
+-            <group name ="volume_group">
+-                <module name ="Speaker"/>
++            <group name="volume_group">
++                <sink name="primary_out"/>
+             </group>
+         </groups>
+-    </VolumeGroupConfig>
+-    <InterruptGroupConfig>
++    </volumeGroups>
++    <interruptGroups>
+         <groups>
+-            <group name ="interrupt_group">
+-                <module name ="Speaker"/>
++            <group name="interrupt_group">
++                <sink name="primary_out"/>
+             </group>
+         </groups>
+-    </InterruptGroupConfig>
++    </interruptGroups>
++    <globalConfigs>
++        <defaultOutput adapter="primary" pipe="primary_output" device="Speaker"/>
++        <commonConfigs>
++            <attribute name="updateRouteSupport" value="false"/>
++            <attribute name="maxRendereres" value="128"/>
++            <attribute name="maxCapturers" value="16"/>
++        </commonConfigs>
++        <paConfigs>
++            <!-- audioLatency is no need any more after ipc, keeping it here just in case.-->
++            <attribute name="audioLatency" value="90"/>
++            <!-- sinkLatency is no need any more after ipc, keeping it here just in case.-->
++            <attribute name="sinkLatency" value="40"/>
++        </paConfigs>
++    </globalConfigs>
+ </audioPolicyConfiguration>

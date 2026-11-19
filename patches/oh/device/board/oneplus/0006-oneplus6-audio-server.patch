@@ -1,0 +1,34 @@
+Use OH 7.0's ALSA adapter (drivers/peripheral/audio supportlibs, with the hooks of 0005) instead of the port's own
+board adapter (fajita/drivers/audio), and start audio_server at boot again.
+
+- The port's adapter installs libaudio_render_adapter.z.so / libaudio_capture_adapter.z.so over OH's. It reads
+  alsa_adapter.json in another format ("cardId" a string), opens playback on PCM device 2 and capture on 1 while its
+  routes feed the speaker from MultiMedia1 and record into MultiMedia3 (the OnePlus 6T's card), so on the OnePlus 6
+  both directions ran on unrouted front ends. fajita/BUILD.gn no longer builds it (the sources stay).
+- 0001 stopped audio_server at boot because without a sound card it never answered and SceneBoard's calls into it
+  blocked SceneBoard's main thread past 6 s. With the card and the HDI working, it runs.
+
+diff --git a/fajita/BUILD.gn b/fajita/BUILD.gn
+index 73ef64b..f5b9e40 100644
+--- a/fajita/BUILD.gn
++++ b/fajita/BUILD.gn
+@@ -23,7 +23,6 @@ group("fajita_group") {
+     # "kernel:build_bootimg",
+     "test:test",
+     # "drivers/bluetooth:libbt_vendor",
+-    "drivers/audio:audio",
+     "napi_module:napi_module",
+     "//device/soc/qualcomm/sdm845/hardware/display:display_buffer_model",
+     "//device/soc/qualcomm/sdm845/hardware/display:display_composer_model",
+diff --git a/fajita/cfg/init.fajita.cfg b/fajita/cfg/init.fajita.cfg
+index 9756429..32de109 100755
+--- a/fajita/cfg/init.fajita.cfg
++++ b/fajita/cfg/init.fajita.cfg
+@@ -39,7 +39,6 @@
+         }, {
+             "name" : "boot",
+             "cmds" : [
+-                "stop audio_server",
+                 "chmod 775 /sys/class/rfkill/rfkill0/state",
+                 "chown blue_host blue_host /sys/class/rfkill/rfkill0/state",
+                 "chmod 777 /sys/touchscreen/tp_power_ctrl",
