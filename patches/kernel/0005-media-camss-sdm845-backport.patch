@@ -16,6 +16,8 @@ reduced to SDM845 and ported down to the 5.10 media core:
 - Each sensor is linked to its CSIPHY and the subdev nodes are created when that sensor binds, not only
   when all sensors of the device tree have bound: the OnePlus 6 has three sensors with separate drivers, and
   one that fails to probe must not hide the others.
+- Bring-up aid, off by default: `enable_gcc_axi=1` keeps the GCC camera AXI clock on while CAMSS is bound
+  (upstream never enables it for SDM845; if the VFE write masters stall here, this rules the clock out).
 The driver is a module (CONFIG_VIDEO_QCOM_CAMSS=m); the built-in kernel is unchanged.
 
 diff --git a/drivers/media/platform/qcom/camss/Makefile b/drivers/media/platform/qcom/camss/Makefile
@@ -13516,7 +13518,7 @@ index bdbae8424..85d4429f9 100644
  void msm_video_unregister(struct camss_video *video);
  
 diff --git a/drivers/media/platform/qcom/camss/camss.c b/drivers/media/platform/qcom/camss/camss.c
-index 9186881af..edfb912b1 100644
+index 9186881af..1e58fb87c 100644
 --- a/drivers/media/platform/qcom/camss/camss.c
 +++ b/drivers/media/platform/qcom/camss/camss.c
 @@ -8,14 +8,17 @@
@@ -13651,9 +13653,9 @@ index 9186881af..edfb912b1 100644
 -	.clock_for_reset = { "vfe0", "csi_vfe0" },
 -	.reg = { "ispif", "csi_clk_mux" },
 -	.interrupt = "ispif"
- 
--};
 -
+-};
+ 
 -static const struct resources vfe_res_8x16[] = {
 -	/* VFE0 */
 +	/* CSIPHY2 */
@@ -14100,8 +14102,8 @@ index 9186881af..edfb912b1 100644
 +
 +		vfe->res->hw_ops->pm_domain_off(vfe);
 +	}
-+}
-+
+ }
+ 
 +static int camss_read_version(struct camss *camss)
 +{
 +	u32 hw_version;
@@ -14136,8 +14138,8 @@ index 9186881af..edfb912b1 100644
 +	}
 +
 +	return ret;
- }
- 
++}
++
 +static int vfe_parent_dev_ops_put(struct camss *camss, int id)
 +{
 +	if (id < camss->res->vfe_num) {
@@ -14192,12 +14194,12 @@ index 9186881af..edfb912b1 100644
  	struct v4l2_fwnode_endpoint vep = { { 0 } };
  	unsigned int i;
 +	int ret;
-+
+ 
+-	v4l2_fwnode_endpoint_parse(of_fwnode_handle(node), &vep);
 +	ret = v4l2_fwnode_endpoint_parse(ep, &vep);
 +	if (ret)
 +		return ret;
- 
--	v4l2_fwnode_endpoint_parse(of_fwnode_handle(node), &vep);
++
 +	switch (vep.bus_type) {
 +	case V4L2_MBUS_CSI2_CPHY:
 +	case V4L2_MBUS_CSI2_DPHY:
@@ -14262,12 +14264,12 @@ index 9186881af..edfb912b1 100644
 +	struct fwnode_handle *ep = NULL;
 +	u8 lane_base = camss->legacy_phy ? 0 : 1;
 +	int ret;
- 
--	for_each_endpoint_of_node(dev->of_node, node) {
++
 +	/* Linux 5.10 backport: only the legacy (CSIPHY in CAMSS) mode */
 +	if (!camss->legacy_phy)
 +		return -EOPNOTSUPP;
-+
+ 
+-	for_each_endpoint_of_node(dev->of_node, node) {
 +	while ((ep = fwnode_graph_get_next_endpoint(fwnode, ep))) {
  		struct camss_async_subdev *csd;
 -		struct v4l2_async_subdev *asd;
@@ -14773,7 +14775,7 @@ index 9186881af..edfb912b1 100644
 -	struct v4l2_device *v4l2_dev = &camss->v4l2_dev;
 -	struct v4l2_subdev *sd;
 -	int ret;
--
+ 
 -	list_for_each_entry(sd, &v4l2_dev->subdevs, list) {
 -		if (sd->host_priv) {
 -			struct media_entity *sensor = &sd->entity;
@@ -14791,7 +14793,7 @@ index 9186881af..edfb912b1 100644
 -					"No source pad in external entity\n");
 -				return -EINVAL;
 -			}
- 
+-
 -			ret = media_create_pad_link(sensor, i,
 -				input, MSM_CSIPHY_PAD_SINK,
 -				MEDIA_LNK_FL_IMMUTABLE | MEDIA_LNK_FL_ENABLED);
@@ -14813,7 +14815,7 @@ index 9186881af..edfb912b1 100644
  }
  
  static const struct v4l2_async_notifier_operations camss_subdev_notifier_ops = {
-@@ -802,6 +1006,123 @@ static const struct media_device_ops camss_media_ops = {
+@@ -802,6 +1006,157 @@ static const struct media_device_ops camss_media_ops = {
  	.link_notify = v4l2_pipeline_link_notify,
  };
  
@@ -14934,10 +14936,44 @@ index 9186881af..edfb912b1 100644
 +	dev_pm_domain_detach(camss->genpd, true);
 +}
 +
++/*
++ * Bring-up aid (not upstream): upstream does not enable the GCC camera AXI
++ * branch for SDM845 CAMSS. If the VFE write masters stall on this kernel,
++ * loading with enable_gcc_axi=1 keeps it on while CAMSS is bound.
++ */
++static bool enable_gcc_axi;
++module_param(enable_gcc_axi, bool, 0444);
++MODULE_PARM_DESC(enable_gcc_axi,
++		 "Keep the gcc_camera_axi clock on while CAMSS is bound (bring-up aid)");
++
++static void camss_gcc_axi_on(struct camss *camss)
++{
++	struct clk *clk;
++
++	if (!enable_gcc_axi)
++		return;
++
++	clk = devm_clk_get(camss->dev, "gcc_camera_axi");
++	if (IS_ERR(clk) || clk_prepare_enable(clk)) {
++		dev_warn(camss->dev, "gcc_camera_axi clock not enabled\n");
++		return;
++	}
++
++	camss->gcc_axi = clk;
++	dev_info(camss->dev, "gcc_camera_axi clock kept on\n");
++}
++
++static void camss_gcc_axi_off(struct camss *camss)
++{
++	if (camss->gcc_axi)
++		clk_disable_unprepare(camss->gcc_axi);
++	camss->gcc_axi = NULL;
++}
++
  /*
   * camss_probe - Probe CAMSS platform device
   * @pdev: Pointer to CAMSS platform device
-@@ -812,68 +1133,50 @@ static int camss_probe(struct platform_device *pdev)
+@@ -812,68 +1167,52 @@ static int camss_probe(struct platform_device *pdev)
  {
  	struct device *dev = &pdev->dev;
  	struct camss *camss;
@@ -15021,6 +15057,8 @@ index 9186881af..edfb912b1 100644
  	if (ret < 0)
 -		goto err_cleanup;
 +		goto err_genpd_cleanup;
++
++	camss_gcc_axi_on(camss);
  
  	ret = dma_set_mask_and_coherent(dev, 0xffffffff);
  	if (ret)
@@ -15029,7 +15067,7 @@ index 9186881af..edfb912b1 100644
  
  	camss->media_dev.dev = camss->dev;
  	strscpy(camss->media_dev.model, "Qualcomm Camera Subsystem",
-@@ -885,67 +1188,57 @@ static int camss_probe(struct platform_device *pdev)
+@@ -885,67 +1224,58 @@ static int camss_probe(struct platform_device *pdev)
  	ret = v4l2_device_register(camss->dev, &camss->v4l2_dev);
  	if (ret < 0) {
  		dev_err(dev, "Failed to register V4L2 device: %d\n", ret);
@@ -15129,11 +15167,12 @@ index 9186881af..edfb912b1 100644
 +err_media_device_cleanup:
 +	media_device_cleanup(&camss->media_dev);
 +err_genpd_cleanup:
++	camss_gcc_axi_off(camss);
 +	camss_genpd_cleanup(camss);
  
  	return ret;
  }
-@@ -957,13 +1250,6 @@ void camss_delete(struct camss *camss)
+@@ -957,13 +1287,6 @@ void camss_delete(struct camss *camss)
  	media_device_cleanup(&camss->media_dev);
  
  	pm_runtime_disable(camss->dev);
@@ -15147,7 +15186,7 @@ index 9186881af..edfb912b1 100644
  }
  
  /*
-@@ -976,19 +1262,31 @@ static int camss_remove(struct platform_device *pdev)
+@@ -976,19 +1299,32 @@ static int camss_remove(struct platform_device *pdev)
  {
  	struct camss *camss = platform_get_drvdata(pdev);
  
@@ -15160,6 +15199,7 @@ index 9186881af..edfb912b1 100644
  	if (atomic_read(&camss->ref_count) == 0)
  		camss_delete(camss);
  
++	camss_gcc_axi_off(camss);
 +	camss_genpd_cleanup(camss);
 +
  	return 0;
@@ -15183,7 +15223,7 @@ index 9186881af..edfb912b1 100644
  	{ }
  };
  
-@@ -996,11 +1294,34 @@ MODULE_DEVICE_TABLE(of, camss_dt_match);
+@@ -996,11 +1332,34 @@ MODULE_DEVICE_TABLE(of, camss_dt_match);
  
  static int __maybe_unused camss_runtime_suspend(struct device *dev)
  {
@@ -15218,7 +15258,7 @@ index 9186881af..edfb912b1 100644
  	return 0;
  }
  
-@@ -1022,7 +1343,6 @@ static struct platform_driver qcom_camss_driver = {
+@@ -1022,7 +1381,6 @@ static struct platform_driver qcom_camss_driver = {
  
  module_platform_driver(qcom_camss_driver);
  
@@ -15227,7 +15267,7 @@ index 9186881af..edfb912b1 100644
  MODULE_AUTHOR("Todor Tomov <todor.tomov@linaro.org>");
  MODULE_LICENSE("GPL v2");
 diff --git a/drivers/media/platform/qcom/camss/camss.h b/drivers/media/platform/qcom/camss/camss.h
-index 1376b0788..f86c80f1a 100644
+index 1376b0788..48e195f0d 100644
 --- a/drivers/media/platform/qcom/camss/camss.h
 +++ b/drivers/media/platform/qcom/camss/camss.h
 @@ -18,10 +18,13 @@
@@ -15244,7 +15284,7 @@ index 1376b0788..f86c80f1a 100644
  
  #define to_camss(ptr_module)	\
  	container_of(ptr_module, struct camss, ptr_module)
-@@ -40,49 +43,105 @@
+@@ -40,49 +43,106 @@
  	(to_camss_index(ptr_module, index)->dev)
  
  #define CAMSS_RES_MAX 17
@@ -15364,10 +15404,11 @@ index 1376b0788..f86c80f1a 100644
 +	struct icc_path *icc_path[ICC_SM8250_COUNT];
 +	const struct camss_resources *res;
 +	bool legacy_phy;
++	struct clk *gcc_axi;
  };
  
  struct camss_camera_interface {
-@@ -91,7 +150,7 @@ struct camss_camera_interface {
+@@ -91,7 +151,7 @@ struct camss_camera_interface {
  };
  
  struct camss_async_subdev {
@@ -15376,7 +15417,7 @@ index 1376b0788..f86c80f1a 100644
  	struct camss_camera_interface interface;
  };
  
-@@ -102,14 +161,27 @@ struct camss_clock {
+@@ -102,14 +162,27 @@ struct camss_clock {
  	u32 nfreqs;
  };
  
