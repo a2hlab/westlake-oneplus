@@ -1,0 +1,35 @@
+The port's image configs pass e2fsdroid the file contexts at obj/base/security/selinux/file_contexts.bin, where
+older OH releases built them. OH 7.0 builds them at obj/base/security/selinux_adapter/file_contexts.bin, and
+mkextimage.py leaves out a contexts file that does not exist without a word, so the system, vendor and userdata
+images had no SELinux labels (every file u:object_r:unlabeled:s0 once SELinux was on).
+
+diff --git a/fajita/image_conf/system_image_conf.txt b/fajita/image_conf/system_image_conf.txt
+index 437396e..e6cfb0c 100644
+--- a/fajita/image_conf/system_image_conf.txt
++++ b/fajita/image_conf/system_image_conf.txt
+@@ -2,4 +2,4 @@
+ 2684354560
+ --fs_type=ext4
+ --dac_config ../../build/ohos/images/mkimage/dac.txt
+---file_context obj/base/security/selinux/file_contexts.bin
++--file_context obj/base/security/selinux_adapter/file_contexts.bin
+diff --git a/fajita/image_conf/userdata_image_conf.txt b/fajita/image_conf/userdata_image_conf.txt
+index 24a6baa..140c399 100644
+--- a/fajita/image_conf/userdata_image_conf.txt
++++ b/fajita/image_conf/userdata_image_conf.txt
+@@ -2,4 +2,4 @@
+ 524288000
+ --fs_type=ext4
+ --dac_config ../../build/ohos/images/mkimage/dac.txt
+---file_context obj/base/security/selinux/file_contexts.bin
++--file_context obj/base/security/selinux_adapter/file_contexts.bin
+diff --git a/fajita/image_conf/vendor_image_conf.txt b/fajita/image_conf/vendor_image_conf.txt
+index cc95f55..c41807f 100644
+--- a/fajita/image_conf/vendor_image_conf.txt
++++ b/fajita/image_conf/vendor_image_conf.txt
+@@ -2,4 +2,4 @@
+ 209715200
+ --fs_type=ext4
+ --dac_config ../../build/ohos/images/mkimage/dac.txt
+---file_context obj/base/security/selinux/file_contexts.bin
++--file_context obj/base/security/selinux_adapter/file_contexts.bin

@@ -1,0 +1,78 @@
+With SELinux built in (vendor/oneplus 0004), init could not start five sdm845 services: their configs name SELinux
+domains that OH's policy does not define (u:r:pd-mapper:s0, rmtfs, tqftpserv, qpower_sa, timekeep_sa), so setting
+the domain failed ("failed to set secon", exit 21) and init gave up after its retries. Without pd-mapper and rmtfs
+the modem and the audio DSP's services never come up: no Wi-Fi, no sound card, no GNSS.
+
+The configs drop "secon"; init runs the services in OH's default domain for services without one (limit_domain).
+Their own domains would be needed for enforcing mode.
+
+diff --git a/sdm845/systemability/pd-mapper/pd-mapper.cfg b/sdm845/systemability/pd-mapper/pd-mapper.cfg
+index 6895f8b..da6b97a 100644
+--- a/sdm845/systemability/pd-mapper/pd-mapper.cfg
++++ b/sdm845/systemability/pd-mapper/pd-mapper.cfg
+@@ -3,8 +3,7 @@
+             "name" : "pd-mapper",
+             "path" : ["/system/bin/pd-mapper"],
+             "uid" : "root",
+-            "gid" : ["root", "shell"],
+-            "secon" : "u:r:pd-mapper:s0"
++            "gid" : ["root", "shell"]
+         }
+     ]
+ }
+\ No newline at end of file
+diff --git a/sdm845/systemability/qpower/init/qpower_sa.cfg b/sdm845/systemability/qpower/init/qpower_sa.cfg
+index f1412b0..f64ba0d 100644
+--- a/sdm845/systemability/qpower/init/qpower_sa.cfg
++++ b/sdm845/systemability/qpower/init/qpower_sa.cfg
+@@ -10,8 +10,7 @@
+             "name" : "qpower_sa",
+             "path" : ["/system/bin/sa_main", "/system/profile/qpower_sa.json"],
+             "uid" : "root",
+-            "gid" : ["root", "shell"],
+-            "secon" : "u:r:qpower_sa:s0"
++            "gid" : ["root", "shell"]
+         }
+     ]
+ }
+diff --git a/sdm845/systemability/rmtfs/rmtfs.cfg b/sdm845/systemability/rmtfs/rmtfs.cfg
+index 670011e..ce627d6 100644
+--- a/sdm845/systemability/rmtfs/rmtfs.cfg
++++ b/sdm845/systemability/rmtfs/rmtfs.cfg
+@@ -3,8 +3,7 @@
+             "name" : "rmtfs",
+             "path" : ["/system/bin/rmtfs", "-r", "-P", "-s"],
+             "uid" : "root",
+-            "gid" : ["root", "shell"],
+-            "secon" : "u:r:rmtfs:s0"
++            "gid" : ["root", "shell"]
+         }
+     ]
+ }
+\ No newline at end of file
+diff --git a/sdm845/systemability/timekeep/init/timekeep_sa.cfg b/sdm845/systemability/timekeep/init/timekeep_sa.cfg
+index 64c2e06..91c957f 100644
+--- a/sdm845/systemability/timekeep/init/timekeep_sa.cfg
++++ b/sdm845/systemability/timekeep/init/timekeep_sa.cfg
+@@ -11,8 +11,7 @@
+             "path" : ["/system/bin/sa_main", "/system/profile/timekeep_sa.json"],
+             "uid" : "time",
+             "gid" : ["time", "shell"],
+-            "caps" : ["SYS_TIME", "WAKE_ALARM"],
+-            "secon" : "u:r:timekeep_sa:s0"
++            "caps" : ["SYS_TIME", "WAKE_ALARM"]
+         }
+     ]
+ }
+diff --git a/sdm845/systemability/tqftpserv/tqftpserv.cfg b/sdm845/systemability/tqftpserv/tqftpserv.cfg
+index 831d0e6..3007594 100644
+--- a/sdm845/systemability/tqftpserv/tqftpserv.cfg
++++ b/sdm845/systemability/tqftpserv/tqftpserv.cfg
+@@ -4,7 +4,6 @@
+             "path" : ["/system/bin/tqftpserv"],
+             "uid" : "root",
+             "gid" : ["root", "shell"],
+-            "secon" : "u:r:tqftpserv:s0",
+             "jobs" : {
+                 "on-boot" : "start rmtfs"
+             }

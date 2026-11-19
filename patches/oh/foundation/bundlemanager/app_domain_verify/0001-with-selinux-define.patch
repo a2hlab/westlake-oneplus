@@ -1,0 +1,16 @@
+With build_selinux = true the services target passes "-DWITH_SELINUX" as a GN define (the OnePlus port's change that
+made librestorecon optional), which GN turns into "-D-DWITH_SELINUX" and clang rejects: #define -DWITH_SELINUX 1,
+"macro name must be an identifier". GN defines are bare names.
+
+diff --git a/services/BUILD.gn b/services/BUILD.gn
+--- a/services/BUILD.gn
++++ b/services/BUILD.gn
+@@ -108,7 +108,7 @@ ohos_shared_library("app_domain_verify_mgr_service") {
+   ]
+   if (build_selinux) {
+     external_deps += [ "selinux_adapter:librestorecon" ]
+-    defines += [ "-DWITH_SELINUX" ]
++    defines += [ "WITH_SELINUX" ]
+   }
+ 
+   sanitize = {

@@ -1,0 +1,19 @@
+SELinux on: build the policy and label the images (build_selinux). The port already chose permissive mode
+(selinux_adapter_enforce = false); like the D600's Westlake rounds (which run with setenforce 0) the policy is loaded
+and every file labelled, without denials blocking anything. The kernel has SELinux built in but its default LSM list
+leaves it out: the boot command line adds lsm=...,selinux,... (scripts/config.sh). Needs
+foundation/bundlemanager/app_domain_verify 0001 to build.
+
+diff --git a/fajita/config.json b/fajita/config.json
+index 15e87b3..ecce89b 100755
+--- a/fajita/config.json
++++ b/fajita/config.json
+@@ -9,7 +9,7 @@
+   "api_version": 8,
+   "enable_ramdisk": true,
+   "enable_absystem": false,
+-  "build_selinux": false,
++  "build_selinux": true,
+   "build_seccomp": false,
+   "device_stack_size": 8388608,
+   "inherit": [

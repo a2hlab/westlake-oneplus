@@ -1,0 +1,16 @@
+With build_selinux = true libbms passes "-DWITH_SELINUX" as a GN define (the OnePlus port's change that made
+librestorecon optional), which GN turns into "-D-DWITH_SELINUX" and clang rejects: #define -DWITH_SELINUX 1,
+"macro name must be an identifier". GN defines are bare names. (Same as foundation/bundlemanager/app_domain_verify
+0001; these two were the only defines in the tree written with -D.)
+
+diff --git a/services/bundlemgr/BUILD.gn b/services/bundlemgr/BUILD.gn
+--- a/services/bundlemgr/BUILD.gn
++++ b/services/bundlemgr/BUILD.gn
+@@ -676,6 +676,6 @@
+   ]
+   if (build_selinux) {
+     external_deps += [ "selinux_adapter:librestorecon" ]
+-    defines += [ "-DWITH_SELINUX" ]
++    defines += [ "WITH_SELINUX" ]
+   }
+ 
