@@ -44,5 +44,7 @@ if wl_hdc shell "bm dump -n $WL_HOST" | grep -q '"bundleName"'; then
   echo "  already installed"
 else
   (cd "$(dirname "$hap")" && wl_hdc install "$(basename "$hap")") | tr -d '\r' | tail -1
+  # Right after a boot the bundle manager can list the new bundle a few seconds after the install returns.
+  for _ in 1 2 3 4 5; do wl_hdc shell "bm dump -n $WL_HOST" | grep -q '"bundleName"' && break; sleep 2; done
   wl_hdc shell "bm dump -n $WL_HOST" | grep -q '"bundleName"' || die "host HAP did not install"
 fi
