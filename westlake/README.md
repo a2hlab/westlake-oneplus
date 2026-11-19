@@ -58,6 +58,7 @@ still failed the next call.
 | `04-framework.sh` | after every boot | stages the framework and checks that it initialises (~3 min) |
 | `05-launch.sh APP` | per app (6.1) | launches the app over the host's window; prints the window lines and saves a screenshot |
 | `06-managed.sh APP` | per app (7.0) | makes, signs and installs the app's own OH bundle, launches it through OH; saves a screenshot |
+| `07-round.sh TAG [FIRST [LAST]]` | corpus rounds (7.0) | the apps of a corpus, one after another as `06` launches one, with the evidence westlake-harness scores; see below |
 | `tap.sh X Y` | tests | a tap through the touchscreen's input node at screen pixel X,Y, as a finger would |
 
 `/data` is a RAM disk on this build, so `03` and `04` are repeated after each boot; nothing is written to the
@@ -119,11 +120,48 @@ What it needs, besides the 6.1 setup above:
 Run `01` to `04` as on 6.1 (`02` builds the spawner too), unlock the phone, then `06-managed.sh APP`. Unlock a minute
 or so after boot: an unlock while the system is still starting can block SceneBoard for 6 s, and OH then restarts it.
 
-Three things had to change for 7.0, and what happens without them:
+Five things had to change for 7.0, and what happens without them:
 
 | | without it | fix |
 |---|---|---|
 | hmdfs on a RAM disk | the storage daemon cannot mount hmdfs on `/data` (tmpfs), user 100 is never unlocked, and SceneBoard refuses to start any app that is not a system app (`ERR_BLOCK_START_FIRST_BOOT_SCREEN_UNLOCK`) | `const.distributed_file_property.enabled=false` in the product's parameters (branch `oh-7.0`, vendor patch) |
 | no SELinux | the spawner admits OH's application manager by uid and SELinux context; this kernel has no SELinux, so it refused every spawn | westlake `oneplus-oh70`: where there is no selinuxfs, the uid alone admits it |
 | SceneBoard makes the window's node | 7.0 sends a node id at Connect, and SceneBoard creates the window's render node with it. The id of a node the app had made itself left two nodes under one id, and under partial rendering every frame was skipped: SceneBoard's blur stayed on screen | westlake `oneplus-oh70`: a fresh id; the app's content node hangs under a root node of its own, under SceneBoard's node. The root node also tells SceneBoard the first frame is there, so it removes the starting window |
+| OH's launch timeouts | OH ends an ability that is not attached within its load timeout (about 10 s from the process start) or does not report FOREGROUND within its foreground timeout (about 5 s); an Android app binds and draws more slowly than an OH app starts, and the bridge answered OH's calls only as the app got to them: Instagram's 9.5 s bind (SceneBoard: `handleLoadTimeout`) and Spotify's first frame 5 s after OH's request ended them before they drew | westlake `oneplus-oh70`: the bind and the activity launch run on threads of their own, so the ability is attached at once; ApplicationForegrounded and FOREGROUND are sent by the bridge when the app's main thread has not sent them in time (300 ms, 3.5 s) |
+| `finishAffinity()` | Westlake answered it without finishing anything; WhatsApp's first activity finishes that way after starting its EULA, kept the OH ability, and the EULA's window waited for a main window that never came | westlake `oneplus-oh70`: it finishes the activities as Android's task manager does, so the ability passes to the next activity |
+
+## Corpus rounds (7.0)
+
+`07-round.sh` runs a corpus round on the phone (the Hong Kong top-1000 corpus of westlake-harness, or any directory
+with its layout): every app is launched as `06-managed.sh` launches one, and its evidence is taken the way
+westlake-harness `device/run_apps.sh` takes it on Westlake's test board (the app's log after a thread dump, a
+screenshot, its hilog, process map, crash dump and spawner log), so that the harness's lifecycle scorer reads both
+boards' rounds alike. Each app is staged with the harness's `device/prep_apps.py`, waits at most `WAIT` (45) seconds
+and leaves once it is on screen (two screenshots in a row that are not SceneBoard's own screens) or gone, and is then
+stopped and its bundle uninstalled. `logs/TAG/results.tsv` has a line per app; running the round again resumes it.
+
+What it needs besides `06`'s settings (`local.sh`): `WL_HARNESS` (a westlake-harness checkout), `WL_CORPUS` (the
+corpus: `apps.csv`, `sources.csv`, `dl/`, `map120/<package>/gap-map.json`) and `WL_CORPUS_LOCK` (the lock file with
+its pins), `WL_GUESTS` (the microG guest build every app gets, as the harness's rounds give it) and `WL_ROUND`, a
+directory for the round that `07-round.sh --setup` makes: a view of the corpus, a copy of `WL_MANIFEST` with the
+corpus pins, the staged apps, the logs.
+
+The phone's `/data` is a RAM disk, so a round keeps one app at a time and shares what it can: the framework and the
+files every app gets (the WebView, runtime libraries and guests, sent once into the launcher's input cache) are
+hard-linked into each app's bundle rather than copied, and the bundle's uninstall frees the rest. Before each app
+`/data` must have `MIN_FREE_MB` (1400) free.
+
+Scoring: `tools/round_score.py logs/TAG [--before <a D600 round's logs>] [--json scores.json]` is the harness's
+`westlake_gap.lifecycle` with SceneBoard's screens as the "host" screens (`refs/`: the desktop, and the plain white
+starting window of an app that has not drawn; `tools/round_screen.py --make-ref` makes one from a screenshot), and
+with the managed launch's bind line as the "bound" marker. `tools/round_compare.py` lists the apps whose rung
+differs between the phone and the D600.
+
+Rounds pass `WESTLAKE_SECURE_LAYER=0`, so that a window that sets `FLAG_SECURE` stays an ordinary OH layer and the
+screenshot shows it; as an OH security layer it is captured black (Spotify's login screen). The app still sees its
+flag set. `SECURE_LAYER=1` keeps the security layers.
+
+Rounds also give apps the locale `en-US` (`LOCALE`; `WESTLAKE_LOCALE` in the app's environment), as on Westlake's
+test board, whose language is English: this image's default language is Chinese, and an app that sees `zh_CN` may
+take another path (a region check, another first screen). `LOCALE=` keeps the phone's own.
 

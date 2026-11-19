@@ -1,2 +1,3 @@
 scripts/local.sh
 westlake/local.sh
+__pycache__/
