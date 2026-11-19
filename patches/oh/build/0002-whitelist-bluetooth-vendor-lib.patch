@@ -1,0 +1,21 @@
+Allow the OnePlus 6 Bluetooth vendor library (device/soc/qualcomm 0003) to use hilog through external_deps, as
+the port's other vendor libraries are allowed: its part (qualcomm_products) has no bundle.json listing its deps.
+
+--- a/compile_standard_whitelist.json
++++ b/compile_standard_whitelist.json
+@@ -39,6 +39,7 @@
+         "//device/soc/qualcomm/sdm845/hardware/display:libdisplay_buffer_vdi_impl",
+         "//device/soc/qualcomm/sdm845/hardware/display:libdisplay_buffer_vendor",
+         "//device/soc/qualcomm/sdm845/hardware/display:libdisplay_composer_vdi_impl",
++        "//device/soc/qualcomm/sdm845/hardware/bluetooth:libbt_vendor",
+         "//device/soc/qualcomm/sdm845/systemability/pd-mapper:pd-mapper",
+         "//device/soc/qualcomm/sdm845/systemability/qbootctl/frameworks:qboot_ctl",
+         "//device/soc/qualcomm/sdm845/systemability/qbootctl/services:libqbootctl",
+@@ -467,6 +468,7 @@
+         "//device/soc/qualcomm/sdm845/hardware/display:libdisplay_buffer_vdi_impl",
+         "//device/soc/qualcomm/sdm845/hardware/display:libdisplay_buffer_vendor",
+         "//device/soc/qualcomm/sdm845/hardware/display:libdisplay_composer_vdi_impl",
++        "//device/soc/qualcomm/sdm845/hardware/bluetooth:libbt_vendor",
+         "//device/soc/qualcomm/sdm845/hardware/display:libhigbm_vendor",
+         "//device/soc/qualcomm/sdm845/systemability/qpower/services:libqpower",
+         "//device/soc/qualcomm/sdm845/systemability/pd-mapper:pd-mapper",

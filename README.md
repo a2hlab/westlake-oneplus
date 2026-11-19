@@ -41,8 +41,9 @@ Checked on the phone with 7.0 + SceneBoard:
 | Wi-Fi: Settings > WLAN switches on and lists the networks in range | yes |
 | enterprise Wi-Fi (802.1X/EAP) | yes: Settings shows the EAP login (method, phase 2, CA certificate, identity, password), and a corporate network (WPA-EAP, PEAP) connected with an address and internet |
 | Android apps through Westlake (managed launch) | yes: Fossify Clock as an OH application, with OH's input, keyboard and BACK |
-| Bluetooth | no: the Bluetooth driver host needs a vendor `libbt_vendor.z.so`, which the port does not have |
-| audio | no: the sound card's driver waits for the audio DSP (`soc@0:sound` deferred); `audio_server` is stopped at boot |
+| Bluetooth | yes: Settings turns it on, the phone is visible and discovers. The port had no vendor `libbt_vendor.z.so` for the driver host; `device/soc/qualcomm/0003` adds one that gives OH's stack the kernel's HCI user channel on hci0 (the kernel's `hci_qca` drives the WCN3990) |
+| audio | no sound yet: the sound card registers ("sdm845 - OnePlus 6") once the OnePlus 6's speaker amplifier driver is loaded (`snd_soc_max98927`, board `0004`; the port's list is the 6T's, with a TFA98xx); OH's audio stack is not set up for this card (no ALSA adapter configuration, a template route file), so `audio_server` stays stopped at boot |
+| GPU | stable: the gralloc pads buffers to 16 rows (`device/soc/qualcomm/0002`); before, Mesa's 16x4 tile resolves wrote past buffers of odd heights (IOMMU faults, CP illegal instruction, hangs) |
 | suspend | the kernel is kept out of it by the board's wake lock (held after boot, no suspends) |
 | modem, camera, sensors | not checked yet |
 

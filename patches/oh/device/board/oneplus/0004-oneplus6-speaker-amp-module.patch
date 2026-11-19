@@ -1,0 +1,18 @@
+Load the OnePlus 6's speaker amplifier driver (snd_soc_max98927). The port's module list is the OnePlus 6T's, whose
+speaker amplifier is a TFA98xx; the OnePlus 6's device tree has a Maxim MAX98927 (i2c 0x3a) on the speaker DAI
+link instead. Without its driver the sound card (sdm845-sndcard) waits for that codec forever (devices_deferred:
+soc@0:sound) and the phone has no sound card at all. With it, card 0 "sdm845 - OnePlus 6" registers with its
+PCM devices. (OH's audio stack still needs to be set up for this card; audio_server stays stopped at boot.)
+
+diff --git a/fajita/modules/modules.load b/fajita/modules/modules.load
+index ae0af72..8392b93 100644
+--- a/fajita/modules/modules.load
++++ b/fajita/modules/modules.load
+@@ -38,6 +38,7 @@ ecdh_generic
+ mc
+ soundwire_bus
+ snd_soc_tfa98xx
++snd_soc_max98927
+ videodev
+ snd_soc_rl6231
+ videobuf2_common

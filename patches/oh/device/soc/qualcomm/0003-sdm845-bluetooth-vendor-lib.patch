@@ -1,0 +1,359 @@
+Bluetooth: the vendor library OH's HCI host loads (libbt_vendor.z.so), which the port did not have (Bluetooth then
+failed to turn on: "dlopen libbt_vendor.z.so failed ... No such file or directory", "hdiInit failed").
+
+The OnePlus 6's controller (WCN3990 on UART) is driven by the Linux kernel (hci_qca loads its firmware and
+registers hci0). The library gives OH's stack the kernel's HCI user channel on hci0, which hands the device to
+one user-space stack (blue_host has CAP_NET_ADMIN, which the user channel needs). OH's H4 reader reads its fd as
+a byte stream (type, header, payload in separate reads) while a user-channel socket returns one packet per read,
+so the host gets one end of a socketpair and a thread relays: controller packets go to the stream as they are,
+and the host's stream is cut into H4 packets, one write each. Built as C++ (the OH header includes <cstdint>);
+it needs build/compile_standard_whitelist.json to allow its hilog dependency (patches/oh/build/0002).
+
+Checked on the phone (OH 7.0): Bluetooth turns on in Settings, the phone is visible as "Oneplus 6T" and
+discovery starts.
+
+diff --git a/sdm845/hardware/bluetooth/BUILD.gn b/sdm845/hardware/bluetooth/BUILD.gn
+index df82681..950d6c7 100644
+--- a/sdm845/hardware/bluetooth/BUILD.gn
++++ b/sdm845/hardware/bluetooth/BUILD.gn
+@@ -42,9 +42,22 @@ ohos_prebuilt_etc("bt_sock_service.cfg") {
+   part_name = "qualcomm_products"
+ }
+ 
++# The Bluetooth vendor library OH's HCI host loads (libbt_vendor.z.so): the kernel drives the controller
++# (WCN3990, hci_qca, hci0); this gives OH's stack the kernel's HCI user channel on hci0.
++ohos_shared_library("libbt_vendor") {
++  sources = [ "bt_vendor_user_channel.cpp" ]
++  include_dirs = [ "//drivers/peripheral/bluetooth/hci/hdi_service/implement" ]
++  cflags_cc = [ "-Wno-c99-designator" ]
++  external_deps = [ "hilog:libhilog" ]
++  install_images = [ chipset_base_dir ]
++  part_name = "qualcomm_products"
++  install_enable = true
++}
++
+ group("bluetooth") {
+   deps = [
+     # ":btSockService",
+     ":bt_sock_service.cfg",
++    ":libbt_vendor",
+   ]
+ }
+\ No newline at end of file
+diff --git a/sdm845/hardware/bluetooth/bt_vendor_user_channel.cpp b/sdm845/hardware/bluetooth/bt_vendor_user_channel.cpp
+new file mode 100644
+index 0000000..fcde5fa
+--- /dev/null
++++ b/sdm845/hardware/bluetooth/bt_vendor_user_channel.cpp
+@@ -0,0 +1,311 @@
++/*
++ * libbt_vendor.z.so (bt_vendor_user_channel.cpp) for the OnePlus 6 (OpenHarmony): the Bluetooth vendor library OH's HCI host
++ * (drivers/peripheral/bluetooth/hci, VendorInterface) loads. The controller (WCN3990 on UART) is driven by the
++ * Linux kernel (hci_qca), which loads its firmware and registers hci0, so this library only gives OH's stack a
++ * transport to it: the kernel's HCI user channel on hci0, which hands the device to one user-space stack.
++ *
++ * OH's H4 reader treats its fd as a byte stream (packet type, then header, then payload, in separate reads); a
++ * user-channel socket returns one whole packet per read and drops what a short read leaves. So the HCI host gets
++ * one end of a socketpair, and a thread relays: packets from the controller are written to the stream as they
++ * are, and the stream from the host is cut into H4 packets, each written to the user channel in one write.
++ */
++#include <errno.h>
++#include <poll.h>
++#include <pthread.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/ioctl.h>
++#include <sys/socket.h>
++#include <unistd.h>
++
++#include "ohos_bt_vendor_lib.h"
++
++/* Built as C++ (the OH header includes <cstdint>), without the C++ runtime: nothing here needs it. */
++#ifdef __cplusplus
++#define EXTERN_C extern "C"
++#else
++#define EXTERN_C
++#endif
++
++#define BT_DOMAIN 0xD000105
++#define LOG_TAG "BtVendorUserChannel"
++#include "hilog/log.h"
++#define LOGI(fmt, ...) HiLogPrint(LOG_CORE, LOG_INFO, BT_DOMAIN, LOG_TAG, fmt, ##__VA_ARGS__)
++#define LOGE(fmt, ...) HiLogPrint(LOG_CORE, LOG_ERROR, BT_DOMAIN, LOG_TAG, fmt, ##__VA_ARGS__)
++
++#ifndef AF_BLUETOOTH
++#define AF_BLUETOOTH 31
++#endif
++#define BTPROTO_HCI 1
++#define HCI_CHANNEL_USER 1
++#define HCIDEVDOWN _IOW('H', 202, int)
++#define HCI_DEV 0
++
++struct sockaddr_hci {
++    sa_family_t hci_family;
++    unsigned short hci_dev;
++    unsigned short hci_channel;
++};
++
++enum { H4_CMD = 1, H4_ACL = 2, H4_SCO = 3, H4_EVT = 4, H4_ISO = 5 };
++
++static const BtVendorCallbacksT *g_cb;
++static int g_user = -1;          /* HCI user channel on hci0 */
++static int g_pair[2] = { -1, -1 };  /* [0] to the HCI host, [1] relay side */
++static int g_stop[2] = { -1, -1 };  /* wakes the relay thread for shutdown */
++static pthread_t g_relay;
++static int g_relayRunning;
++
++static int WriteAll(int fd, const uint8_t *p, size_t n)
++{
++    while (n > 0) {
++        ssize_t w = write(fd, p, n);
++        if (w < 0) {
++            if (errno == EINTR) {
++                continue;
++            }
++            return -1;
++        }
++        p += w;
++        n -= (size_t)w;
++    }
++    return 0;
++}
++
++/* Length of the complete H4 packet at buf (type byte included), 0 while more bytes are needed, -1 if invalid. */
++static long H4PacketLength(const uint8_t *buf, size_t have)
++{
++    size_t hdr;
++    size_t len;
++    if (have < 1) {
++        return 0;
++    }
++    switch (buf[0]) {
++        case H4_CMD:  /* opcode(2) len(1) */
++        case H4_SCO:  /* handle(2) len(1) */
++            hdr = 3;
++            if (have < 1 + hdr) {
++                return 0;
++            }
++            len = buf[3];
++            break;
++        case H4_ACL:  /* handle(2) len(2) */
++        case H4_ISO:  /* handle(2) len(14 bits) */
++            hdr = 4;
++            if (have < 1 + hdr) {
++                return 0;
++            }
++            len = (size_t)buf[3] | ((size_t)buf[4] << 8);
++            if (buf[0] == H4_ISO) {
++                len &= 0x3fff;
++            }
++            break;
++        default:
++            return -1;
++    }
++    return (have >= 1 + hdr + len) ? (long)(1 + hdr + len) : 0;
++}
++
++static void *Relay(void *arg)
++{
++    (void)arg;
++    static uint8_t in[70000];   /* host -> controller stream, cut into packets */
++    static uint8_t pkt[70000];  /* controller -> host, one packet per read */
++    size_t have = 0;
++    struct pollfd fds[3] = {
++        { .fd = g_user, .events = POLLIN },
++        { .fd = g_pair[1], .events = POLLIN },
++        { .fd = g_stop[0], .events = POLLIN },
++    };
++    LOGI("relay running");
++    for (;;) {
++        if (poll(fds, 3, -1) < 0) {
++            if (errno == EINTR) {
++                continue;
++            }
++            LOGE("poll: %{public}s", strerror(errno));
++            break;
++        }
++        if (fds[2].revents) {
++            break;
++        }
++        if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
++            LOGE("user channel closed (revents %{public}d)", fds[0].revents);
++            break;
++        }
++        if (fds[0].revents & POLLIN) {
++            ssize_t n = read(g_user, pkt, sizeof(pkt));
++            if (n > 0 && WriteAll(g_pair[1], pkt, (size_t)n) != 0) {
++                LOGE("write to host: %{public}s", strerror(errno));
++                break;
++            }
++        }
++        if (fds[1].revents & (POLLERR | POLLHUP | POLLNVAL)) {
++            LOGI("host side closed");
++            break;
++        }
++        if (fds[1].revents & POLLIN) {
++            ssize_t n = read(g_pair[1], in + have, sizeof(in) - have);
++            if (n <= 0) {
++                LOGI("host side read %{public}d", (int)n);
++                break;
++            }
++            have += (size_t)n;
++            for (;;) {
++                long len = H4PacketLength(in, have);
++                if (len < 0) {
++                    LOGE("bad H4 packet type %{public}d from the host; dropping %{public}d bytes", in[0], (int)have);
++                    have = 0;
++                    break;
++                }
++                if (len == 0) {
++                    break;
++                }
++                if (write(g_user, in, (size_t)len) != len) {
++                    LOGE("write to controller: %{public}s", strerror(errno));
++                }
++                memmove(in, in + len, have - (size_t)len);
++                have -= (size_t)len;
++            }
++        }
++    }
++    LOGI("relay stopped");
++    return NULL;
++}
++
++static int OpenUserChannel(void)
++{
++    int ctl = socket(AF_BLUETOOTH, SOCK_RAW | SOCK_CLOEXEC, BTPROTO_HCI);
++    if (ctl < 0) {
++        LOGE("HCI socket: %{public}s", strerror(errno));
++        return -1;
++    }
++    /* the user channel needs the device down (the kernel then leaves it to us) */
++    if (ioctl(ctl, HCIDEVDOWN, HCI_DEV) < 0) {
++        LOGI("HCIDEVDOWN: %{public}s", strerror(errno));
++    }
++    close(ctl);
++    for (int i = 0; i < 20; i++) {
++        int fd = socket(AF_BLUETOOTH, SOCK_RAW | SOCK_CLOEXEC, BTPROTO_HCI);
++        if (fd < 0) {
++            LOGE("HCI socket: %{public}s", strerror(errno));
++            return -1;
++        }
++        struct sockaddr_hci addr = { .hci_family = AF_BLUETOOTH, .hci_dev = HCI_DEV, .hci_channel = HCI_CHANNEL_USER };
++        if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
++            LOGI("user channel on hci%{public}d open", HCI_DEV);
++            return fd;
++        }
++        LOGI("bind user channel: %{public}s (try %{public}d)", strerror(errno), i + 1);
++        close(fd);
++        usleep(100 * 1000);
++    }
++    return -1;
++}
++
++static void CloseChannel(void)
++{
++    if (g_relayRunning) {
++        char c = 1;
++        (void)write(g_stop[1], &c, 1);
++        pthread_join(g_relay, NULL);
++        g_relayRunning = 0;
++    }
++    int *fds[] = { &g_user, &g_pair[0], &g_pair[1], &g_stop[0], &g_stop[1] };
++    for (size_t i = 0; i < sizeof(fds) / sizeof(fds[0]); i++) {
++        if (*fds[i] >= 0) {
++            close(*fds[i]);
++            *fds[i] = -1;
++        }
++    }
++}
++
++static int OpenChannel(int *channels)
++{
++    CloseChannel();
++    g_user = OpenUserChannel();
++    if (g_user < 0) {
++        return -1;
++    }
++    if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, g_pair) != 0 || pipe(g_stop) != 0) {
++        LOGE("socketpair/pipe: %{public}s", strerror(errno));
++        CloseChannel();
++        return -1;
++    }
++    if (pthread_create(&g_relay, NULL, Relay, NULL) != 0) {
++        LOGE("relay thread failed");
++        CloseChannel();
++        return -1;
++    }
++    g_relayRunning = 1;
++    channels[0] = g_pair[0];
++    return 1;  /* one H4 channel */
++}
++
++static void *ReportInit(void *arg)
++{
++    (void)arg;
++    if (g_cb != NULL && g_cb->initCb != NULL) {
++        g_cb->initCb(BTC_OP_RESULT_SUCCESS);
++    }
++    return NULL;
++}
++
++static int Init(const BtVendorCallbacksT *cb, unsigned char *localBdaddr)
++{
++    (void)localBdaddr;
++    g_cb = cb;
++    LOGI("init");
++    return 0;
++}
++
++static int Op(BtOpcodeT opcode, void *param)
++{
++    switch (opcode) {
++        case BT_OP_POWER_ON:
++        case BT_OP_POWER_OFF:
++        case BT_OP_LPM_ENABLE:
++        case BT_OP_LPM_DISABLE:
++        case BT_OP_WAKEUP_LOCK:
++        case BT_OP_WAKEUP_UNLOCK:
++        case BT_OP_EVENT_CALLBACK:
++            return 0;
++        case BT_OP_HCI_CHANNEL_OPEN:
++            return OpenChannel((int *)param);
++        case BT_OP_HCI_CHANNEL_CLOSE:
++            CloseChannel();
++            return 0;
++        case BT_OP_INIT: {
++            /* the kernel did the controller's setup (firmware): report it done, off this call's stack */
++            pthread_t t;
++            if (pthread_create(&t, NULL, ReportInit, NULL) == 0) {
++                pthread_detach(t);
++            } else {
++                ReportInit(NULL);
++            }
++            return 0;
++        }
++        case BT_OP_GET_LPM_TIMER:
++            if (param != NULL) {
++                *(uint32_t *)param = 3000;
++            }
++            return 0;
++        default:
++            return 0;
++    }
++}
++
++static void Close(void)
++{
++    CloseChannel();
++    g_cb = NULL;
++    LOGI("closed");
++}
++
++EXTERN_C __attribute__((visibility("default"))) const BtVendorInterfaceT BLUETOOTH_VENDOR_LIB_INTERFACE = {
++    .size = sizeof(BtVendorInterfaceT),
++    .init = Init,
++    .op = Op,
++    .close = Close,
++};
