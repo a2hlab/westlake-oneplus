@@ -1,0 +1,642 @@
+GNSS: the vendor library OH's GNSS HDI loads (vendorGnssAdapter.so, symbol GnssVendorInterface), which the port did
+not have, so OH's location service had no GNSS behind it.
+
+The SDM845 modem holds the GNSS engine; its QMI LOC service (0x10) is reached over QRTR (the modem's helpers rmtfs,
+pd-mapper and tqftpserv run on the board). The library is a small QMI LOC client: it finds LOC through QRTR's name
+service, registers for position reports, NMEA and engine state, sets standalone operation and runs periodic fix
+sessions (QMI LOC Start/Stop). Fixes come from the position reports, satellites from the NMEA GSV sentences.
+Built as C++ (the OH header uses enum class) without the C++ runtime; it needs the build whitelist entry of
+patches/oh/build/0003. No AGNSS, geofence or measurements (getGnssModuleIface returns none).
+
+Checked on the phone (OH 7.0): with Location on, the GNSS host loads the library and finds QMI LOC at node 0 port 80;
+a test session reports engine on and NMEA once a second; Wi-Fi stays up during sessions. A fix needs sky view (the
+test phone is indoors: no satellites in view).
+
+diff --git a/sdm845/hardware/BUILD.gn b/sdm845/hardware/BUILD.gn
+index e5d4654..e0dca2d 100644
+--- a/sdm845/hardware/BUILD.gn
++++ b/sdm845/hardware/BUILD.gn
+@@ -18,5 +18,6 @@ group("hardware_group") {
+     # "gpu:gpu",
+     "gpu-mesa:gpu",
+     "bluetooth:bluetooth",
++    "location:location",
+   ]
+ }
+diff --git a/sdm845/hardware/location/BUILD.gn b/sdm845/hardware/location/BUILD.gn
+new file mode 100644
+index 0000000..fd9afa4
+--- /dev/null
++++ b/sdm845/hardware/location/BUILD.gn
+@@ -0,0 +1,25 @@
++# Copyright (c) 2026 a2hlab. Licensed under the Apache License, Version 2.0.
++import("//build/ohos.gni")
++
++# The GNSS vendor library OH's GNSS HDI loads (vendorGnssAdapter.so, drivers/peripheral/location/gnss): a QMI LOC
++# client for the SDM845 modem's GNSS engine over QRTR.
++ohos_shared_library("vendorGnssAdapter") {
++  output_name = "vendorGnssAdapter"
++  output_prefix_override = true
++  output_extension = "so"
++  sources = [ "vendor_gnss_adapter.cpp" ]
++  include_dirs = [ "//drivers/peripheral/location/gnss/hdi_service" ]
++  cflags_cc = [
++    "-fno-exceptions",
++    "-fno-rtti",
++  ]
++  external_deps = [ "hilog:libhilog" ]
++  install_images = [ chipset_base_dir ]
++  module_install_dir = "lib64"
++  part_name = "qualcomm_products"
++  install_enable = true
++}
++
++group("location") {
++  deps = [ ":vendorGnssAdapter" ]
++}
+diff --git a/sdm845/hardware/location/vendor_gnss_adapter.cpp b/sdm845/hardware/location/vendor_gnss_adapter.cpp
+new file mode 100644
+index 0000000..8d37f43
+--- /dev/null
++++ b/sdm845/hardware/location/vendor_gnss_adapter.cpp
+@@ -0,0 +1,580 @@
++/*
++ * vendorGnssAdapter.so for the OnePlus 6 (OpenHarmony): the GNSS vendor library OH's GNSS HDI loads
++ * (drivers/peripheral/location/gnss/hdi_service/location_vendor_interface.cpp, symbol "GnssVendorInterface").
++ *
++ * The SDM845 modem holds the GNSS engine. Its QMI LOC service (service 0x10) is reached over QRTR; the board runs
++ * the modem's helpers (rmtfs, pd-mapper, tqftpserv). This is a small QMI LOC client: register for position reports,
++ * NMEA and engine state, standalone operation, and periodic fix sessions. Satellite status comes from the GSV
++ * sentences of the NMEA stream. Built as C++ (the OH header uses enum class) without the C++ runtime.
++ */
++#include <errno.h>
++#include <poll.h>
++#include <pthread.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <time.h>
++#include <unistd.h>
++
++#include "hilog/log.h"
++#include "location_vendor_lib.h"
++
++using namespace OHOS::HDI::Location;
++
++#define GNSS_DOMAIN 0xD002511
++#define GNSS_TAG "GnssQmiLoc"
++#define LOGI(fmt, ...) HiLogPrint(LOG_CORE, LOG_INFO, GNSS_DOMAIN, GNSS_TAG, fmt, ##__VA_ARGS__)
++#define LOGE(fmt, ...) HiLogPrint(LOG_CORE, LOG_ERROR, GNSS_DOMAIN, GNSS_TAG, fmt, ##__VA_ARGS__)
++
++#ifndef AF_QIPCRTR
++#define AF_QIPCRTR 42
++#endif
++
++namespace {
++struct SockaddrQrtr {
++    unsigned short family;
++    uint32_t node;
++    uint32_t port;
++};
++
++struct QrtrCtrlPkt {
++    uint32_t cmd;
++    uint32_t service;
++    uint32_t instance;
++    uint32_t node;
++    uint32_t port;
++} __attribute__((packed));
++
++struct QmiHeader {
++    uint8_t type;
++    uint16_t txn;
++    uint16_t msgId;
++    uint16_t len;
++} __attribute__((packed));
++
++constexpr uint32_t QRTR_PORT_CTRL = 0xfffffffeu;
++constexpr uint32_t QRTR_TYPE_NEW_SERVER = 4;
++constexpr uint32_t QRTR_TYPE_NEW_LOOKUP = 10;
++constexpr uint32_t QMI_SERVICE_LOC = 0x10;
++
++constexpr uint8_t QMI_REQUEST = 0;
++constexpr uint8_t QMI_RESPONSE = 2;
++constexpr uint8_t QMI_INDICATION = 4;
++
++constexpr uint16_t LOC_REG_EVENTS = 0x0021;
++constexpr uint16_t LOC_START = 0x0022;
++constexpr uint16_t LOC_STOP = 0x0023;
++constexpr uint16_t LOC_POSITION_REPORT_IND = 0x0024;
++constexpr uint16_t LOC_NMEA_IND = 0x0026;
++constexpr uint16_t LOC_ENGINE_STATE_IND = 0x002B;
++constexpr uint16_t LOC_SET_NMEA_TYPES = 0x003E;
++constexpr uint16_t LOC_SET_OPERATION_MODE = 0x004A;
++
++constexpr uint64_t LOC_EVENT_POSITION_REPORT = 1ull << 0;
++constexpr uint64_t LOC_EVENT_NMEA = 1ull << 2;
++constexpr uint64_t LOC_EVENT_ENGINE_STATE = 1ull << 7;
++constexpr uint64_t LOC_EVENT_FIX_SESSION_STATE = 1ull << 8;
++constexpr uint32_t LOC_NMEA_ALL = 0x1ff;           /* GGA RMC GSV GSA VTG PQXFI PSTIS GLGSV GNGSA */
++constexpr uint32_t LOC_OPERATION_STANDALONE = 4;
++constexpr uint32_t LOC_FIX_PERIODIC = 1;
++constexpr uint32_t LOC_INTERMEDIATE_ENABLE = 1;
++constexpr uint32_t LOC_SESSION_SUCCESS = 0;
++constexpr int32_t LOC_ENGINE_ON = 1;
++constexpr uint8_t SESSION_ID = 1;
++
++GnssCallbackStruct g_callbacks;
++bool g_haveCallbacks = false;
++int g_fd = -1;
++int g_stop[2] = { -1, -1 };
++SockaddrQrtr g_loc;
++pthread_t g_reader;
++bool g_readerRunning = false;
++uint16_t g_txn = 1;
++pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
++GnssSatelliteStatus g_sats;    /* GSV sentences of the current epoch */
++
++uint64_t BootTimeNs()
++{
++    struct timespec ts;
++    clock_gettime(CLOCK_BOOTTIME, &ts);
++    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
++}
++
++int64_t RealTimeMs()
++{
++    struct timespec ts;
++    clock_gettime(CLOCK_REALTIME, &ts);
++    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
++}
++
++void WorkingStatus(GnssWorkingStatus status)
++{
++    if (g_haveCallbacks && g_callbacks.gnssCallback.gnssWorkingStatusUpdate != nullptr) {
++        uint16_t s = (uint16_t)status;
++        g_callbacks.gnssCallback.gnssWorkingStatusUpdate(&s);
++    }
++}
++
++/* TLV writer */
++struct Msg {
++    uint8_t buf[512];
++    size_t len;
++};
++
++void MsgBegin(Msg *m)
++{
++    m->len = sizeof(QmiHeader);
++}
++
++void MsgTlv(Msg *m, uint8_t type, const void *value, uint16_t len)
++{
++    if (m->len + 3 + len > sizeof(m->buf)) {
++        return;
++    }
++    m->buf[m->len] = type;
++    memcpy(m->buf + m->len + 1, &len, 2);
++    memcpy(m->buf + m->len + 3, value, len);
++    m->len += 3 + len;
++}
++
++int Request(uint16_t msgId, Msg *m)
++{
++    pthread_mutex_lock(&g_lock);
++    QmiHeader h = { QMI_REQUEST, g_txn++, msgId, (uint16_t)(m->len - sizeof(QmiHeader)) };
++    memcpy(m->buf, &h, sizeof(h));
++    int fd = g_fd;
++    pthread_mutex_unlock(&g_lock);
++    if (fd < 0) {
++        return -1;
++    }
++    if (sendto(fd, m->buf, m->len, 0, (struct sockaddr *)&g_loc, sizeof(g_loc)) < 0) {
++        LOGE("send 0x%{public}04x: %{public}s", msgId, strerror(errno));
++        return -1;
++    }
++    return 0;
++}
++
++/* TLV reader: finds TLV `type` in the message body */
++const uint8_t *FindTlv(const uint8_t *body, size_t len, uint8_t type, uint16_t *tlvLen)
++{
++    size_t i = 0;
++    while (i + 3 <= len) {
++        uint16_t l;
++        memcpy(&l, body + i + 1, 2);
++        if (i + 3 + l > len) {
++            return nullptr;
++        }
++        if (body[i] == type) {
++            *tlvLen = l;
++            return body + i + 3;
++        }
++        i += 3 + l;
++    }
++    return nullptr;
++}
++
++template <typename T> bool Get(const uint8_t *body, size_t len, uint8_t type, T *out)
++{
++    uint16_t l = 0;
++    const uint8_t *v = FindTlv(body, len, type, &l);
++    if (v == nullptr || l < sizeof(T)) {
++        return false;
++    }
++    memcpy(out, v, sizeof(T));
++    return true;
++}
++
++void OnPositionReport(const uint8_t *body, size_t len)
++{
++    uint32_t status = 0xffffffff;
++    double lat = 0;
++    double lon = 0;
++    if (!Get(body, len, 0x01, &status) || status != LOC_SESSION_SUCCESS ||
++        !Get(body, len, 0x10, &lat) || !Get(body, len, 0x11, &lon)) {
++        return;
++    }
++    GnssLocation loc;
++    memset(&loc, 0, sizeof(loc));
++    loc.size = sizeof(loc);
++    loc.latitude = lat;
++    loc.longitude = lon;
++    loc.fieldValidity = (uint32_t)GnssLocationValidity::GNSS_LOCATION_LAT_VALID |
++        (uint32_t)GnssLocationValidity::GNSS_LOCATION_LONG_VALID;
++    float f = 0;
++    uint64_t utc = 0;
++    if (Get(body, len, 0x1A, &f)) {
++        loc.altitude = f;
++        loc.fieldValidity |= (uint32_t)GnssLocationValidity::GNSS_LOCATION_ALTITUDE_VALID;
++    }
++    if (Get(body, len, 0x12, &f)) {
++        loc.horizontalAccuracy = f;
++        loc.fieldValidity |= (uint32_t)GnssLocationValidity::GNSS_LOCATION_HORIZONTAL_ACCURACY_VALID;
++    }
++    if (Get(body, len, 0x1C, &f)) {
++        loc.verticalAccuracy = f;
++        loc.fieldValidity |= (uint32_t)GnssLocationValidity::GNSS_LOCATION_VERTICAL_ACCURACY_VALID;
++    }
++    if (Get(body, len, 0x18, &f)) {
++        loc.speed = f;
++        loc.fieldValidity |= (uint32_t)GnssLocationValidity::GNSS_LOCATION_SPEED_VALID;
++    }
++    if (Get(body, len, 0x19, &f)) {
++        loc.speedAccuracy = f;
++        loc.fieldValidity |= (uint32_t)GnssLocationValidity::GNSS_LOCATION_SPEED_ACCURACY_VALID;
++    }
++    if (Get(body, len, 0x20, &f)) {
++        loc.bearing = f;
++        loc.fieldValidity |= (uint32_t)GnssLocationValidity::GNSS_LOCATION_BEARING_VALID;
++    }
++    if (Get(body, len, 0x21, &f)) {
++        loc.bearingAccuracy = f;
++        loc.fieldValidity |= (uint32_t)GnssLocationValidity::GNSS_LOCATION_BEARING_ACCURACY_VALID;
++    }
++    loc.timeForFix = Get(body, len, 0x25, &utc) ? (int64_t)utc : RealTimeMs();
++    loc.fieldValidity |= (uint32_t)GnssLocationValidity::GNSS_LOCATION_TIME_VALID;
++    loc.timeSinceBoot = BootTimeNs();
++    loc.fieldValidity |= (uint32_t)GnssLocationValidity::GNSS_LOCATION_TIME_SINCE_BOOT_VALID;
++    LOGI("fix: accuracy %{public}.0f m", loc.horizontalAccuracy);
++    if (g_haveCallbacks && g_callbacks.gnssCallback.locationUpdate != nullptr) {
++        g_callbacks.gnssCallback.locationUpdate(&loc);
++    }
++}
++
++/* field i (0-based, after the sentence name) of an NMEA sentence, into out */
++bool NmeaField(const char *s, int i, char *out, size_t outLen)
++{
++    const char *p = strchr(s, ',');
++    for (int k = 0; p != nullptr && k < i; k++) {
++        p = strchr(p + 1, ',');
++    }
++    if (p == nullptr) {
++        return false;
++    }
++    p++;
++    size_t n = strcspn(p, ",*\r\n");
++    if (n >= outLen) {
++        n = outLen - 1;
++    }
++    memcpy(out, p, n);
++    out[n] = '\0';
++    return true;
++}
++
++uint8_t Constellation(const char *talker)
++{
++    if (strncmp(talker, "GP", 2) == 0) return (uint8_t)ConstellationCategory::CONSTELLATION_CATEGORY_GPS;
++    if (strncmp(talker, "GL", 2) == 0) return (uint8_t)ConstellationCategory::CONSTELLATION_CATEGORY_GLONASS;
++    if (strncmp(talker, "GA", 2) == 0) return (uint8_t)ConstellationCategory::CONSTELLATION_CATEGORY_GALILEO;
++    if (strncmp(talker, "GB", 2) == 0 || strncmp(talker, "BD", 2) == 0) {
++        return (uint8_t)ConstellationCategory::CONSTELLATION_CATEGORY_BEIDOU;
++    }
++    if (strncmp(talker, "GQ", 2) == 0) return (uint8_t)ConstellationCategory::CONSTELLATION_CATEGORY_QZSS;
++    return (uint8_t)ConstellationCategory::CONSTELLATION_CATEGORY_UNKNOWN;
++}
++
++/* $xxGSV,total,num,inView,{prn,elevation,azimuth,snr}x4 */
++void OnGsv(const char *s)
++{
++    char f[16];
++    for (int k = 0; k < 4; k++) {
++        if (!NmeaField(s, 3 + k * 4, f, sizeof(f)) || f[0] == '\0') {
++            break;
++        }
++        if (g_sats.satellitesNum >= SATELLITE_NUM_MAXIMUM) {
++            return;
++        }
++        SatelliteStatusInfo *sv = &g_sats.satellitesList[g_sats.satellitesNum];
++        memset(sv, 0, sizeof(*sv));
++        sv->size = sizeof(*sv);
++        sv->satelliteId = (int16_t)atoi(f);
++        sv->constellationCategory = Constellation(s + 1);
++        if (NmeaField(s, 4 + k * 4, f, sizeof(f))) sv->elevation = (float)atof(f);
++        if (NmeaField(s, 5 + k * 4, f, sizeof(f))) sv->azimuth = (float)atof(f);
++        if (NmeaField(s, 6 + k * 4, f, sizeof(f))) sv->cn0 = (float)atof(f);
++        g_sats.satellitesNum++;
++    }
++}
++
++void OnNmea(const uint8_t *body, size_t len)
++{
++    uint16_t l = 0;
++    const uint8_t *v = FindTlv(body, len, 0x01, &l);
++    if (v == nullptr || l == 0) {
++        return;
++    }
++    char s[256];
++    size_t n = l < sizeof(s) - 1 ? l : sizeof(s) - 1;
++    memcpy(s, v, n);
++    s[n] = '\0';
++    n = strlen(s);
++    if (g_haveCallbacks && g_callbacks.gnssCallback.nmeaUpdate != nullptr) {
++        g_callbacks.gnssCallback.nmeaUpdate(RealTimeMs(), s, (int)n);
++    }
++    if (n > 6 && s[0] == '$' && strncmp(s + 3, "GSV", 3) == 0) {
++        OnGsv(s);
++    } else if (n > 6 && s[0] == '$' && strncmp(s + 3, "GGA", 3) == 0) {
++        /* one epoch's GSV groups come before its GGA */
++        if (g_haveCallbacks && g_callbacks.gnssCallback.satelliteStatusUpdate != nullptr) {
++            g_sats.size = sizeof(g_sats);
++            g_callbacks.gnssCallback.satelliteStatusUpdate(&g_sats);
++        }
++        g_sats.satellitesNum = 0;
++    }
++}
++
++void *Reader(void *)
++{
++    uint8_t buf[4096];
++    struct pollfd fds[2] = { { g_fd, POLLIN, 0 }, { g_stop[0], POLLIN, 0 } };
++    LOGI("reader running");
++    for (;;) {
++        if (poll(fds, 2, -1) < 0) {
++            if (errno == EINTR) {
++                continue;
++            }
++            break;
++        }
++        if (fds[1].revents) {
++            break;
++        }
++        if (!(fds[0].revents & POLLIN)) {
++            continue;
++        }
++        ssize_t n = recv(g_fd, buf, sizeof(buf), 0);
++        if (n < (ssize_t)sizeof(QmiHeader)) {
++            continue;
++        }
++        QmiHeader h;
++        memcpy(&h, buf, sizeof(h));
++        const uint8_t *body = buf + sizeof(h);
++        size_t len = (size_t)n - sizeof(h);
++        if (h.len < len) {
++            len = h.len;
++        }
++        if (h.type == QMI_RESPONSE) {
++            uint16_t r[2] = { 0, 0 };
++            if (Get(body, len, 0x02, &r) && r[0] != 0) {
++                LOGE("request 0x%{public}04x failed: error %{public}u", h.msgId, r[1]);
++            }
++        } else if (h.type == QMI_INDICATION) {
++            if (h.msgId == LOC_POSITION_REPORT_IND) {
++                OnPositionReport(body, len);
++            } else if (h.msgId == LOC_NMEA_IND) {
++                OnNmea(body, len);
++            } else if (h.msgId == LOC_ENGINE_STATE_IND) {
++                int32_t st = 0;
++                if (Get(body, len, 0x01, &st)) {
++                    LOGI("engine %{public}s", st == LOC_ENGINE_ON ? "on" : "off");
++                    WorkingStatus(st == LOC_ENGINE_ON ? GnssWorkingStatus::GNSS_WORKING_STATUS_POWER_ON :
++                        GnssWorkingStatus::GNSS_WORKING_STATUS_POWER_OFF);
++                }
++            }
++        }
++    }
++    LOGI("reader stopped");
++    return nullptr;
++}
++
++/* asks QRTR's name service where the LOC service is */
++bool FindLoc(int fd)
++{
++    SockaddrQrtr me;
++    socklen_t sl = sizeof(me);
++    if (getsockname(fd, (struct sockaddr *)&me, &sl) < 0) {
++        return false;
++    }
++    SockaddrQrtr ns = { AF_QIPCRTR, me.node, QRTR_PORT_CTRL };
++    QrtrCtrlPkt pkt = { QRTR_TYPE_NEW_LOOKUP, QMI_SERVICE_LOC, 0, 0, 0 };
++    if (sendto(fd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&ns, sizeof(ns)) < 0) {
++        return false;
++    }
++    struct pollfd p = { fd, POLLIN, 0 };
++    bool found = false;
++    while (poll(&p, 1, 3000) > 0) {
++        QrtrCtrlPkt r;
++        if (recv(fd, &r, sizeof(r), 0) < (ssize_t)sizeof(r) || r.cmd != QRTR_TYPE_NEW_SERVER) {
++            continue;
++        }
++        if (r.service == 0 && r.node == 0 && r.port == 0) {
++            break;
++        }
++        if (r.service == QMI_SERVICE_LOC && !found) {
++            g_loc = { AF_QIPCRTR, r.node, r.port };
++            found = true;
++        }
++    }
++    return found;
++}
++
++int EnableGnss(GnssCallbackStruct *callbacks)
++{
++    if (callbacks != nullptr) {
++        g_callbacks = *callbacks;
++        g_haveCallbacks = true;
++    }
++    if (g_fd >= 0) {
++        return 0;
++    }
++    int fd = socket(AF_QIPCRTR, SOCK_DGRAM | SOCK_CLOEXEC, 0);
++    if (fd < 0) {
++        LOGE("QRTR socket: %{public}s", strerror(errno));
++        return -1;
++    }
++    if (!FindLoc(fd)) {
++        LOGE("no QMI LOC service on QRTR (modem down?)");
++        close(fd);
++        return -1;
++    }
++    LOGI("QMI LOC at node %{public}u port %{public}u", g_loc.node, g_loc.port);
++    if (pipe(g_stop) != 0) {
++        close(fd);
++        return -1;
++    }
++    g_fd = fd;
++    if (pthread_create(&g_reader, nullptr, Reader, nullptr) == 0) {
++        g_readerRunning = true;
++    }
++    Msg m;
++    MsgBegin(&m);
++    uint64_t mask = LOC_EVENT_POSITION_REPORT | LOC_EVENT_NMEA | LOC_EVENT_ENGINE_STATE | LOC_EVENT_FIX_SESSION_STATE;
++    MsgTlv(&m, 0x01, &mask, sizeof(mask));
++    Request(LOC_REG_EVENTS, &m);
++    MsgBegin(&m);
++    uint32_t nmea = LOC_NMEA_ALL;
++    MsgTlv(&m, 0x01, &nmea, sizeof(nmea));
++    Request(LOC_SET_NMEA_TYPES, &m);
++    MsgBegin(&m);
++    uint32_t mode = LOC_OPERATION_STANDALONE;
++    MsgTlv(&m, 0x01, &mode, sizeof(mode));
++    Request(LOC_SET_OPERATION_MODE, &m);
++    if (g_haveCallbacks && g_callbacks.gnssCallback.capabilitiesUpdate != nullptr) {
++        g_callbacks.gnssCallback.capabilitiesUpdate(0);
++    }
++    return 0;
++}
++
++int StartGnss(uint32_t category)
++{
++    (void)category;
++    Msg m;
++    MsgBegin(&m);
++    uint8_t sid = SESSION_ID;
++    uint32_t recurrence = LOC_FIX_PERIODIC;
++    uint32_t intermediate = LOC_INTERMEDIATE_ENABLE;
++    uint32_t interval = 1000;
++    MsgTlv(&m, 0x01, &sid, sizeof(sid));
++    MsgTlv(&m, 0x10, &recurrence, sizeof(recurrence));
++    MsgTlv(&m, 0x12, &intermediate, sizeof(intermediate));
++    MsgTlv(&m, 0x13, &interval, sizeof(interval));
++    int ret = Request(LOC_START, &m);
++    LOGI("start: %{public}d", ret);
++    WorkingStatus(GnssWorkingStatus::GNSS_WORKING_STATUS_NAVIGATING_BEGIN);
++    return ret;
++}
++
++int StopGnss(uint32_t category)
++{
++    (void)category;
++    Msg m;
++    MsgBegin(&m);
++    uint8_t sid = SESSION_ID;
++    MsgTlv(&m, 0x01, &sid, sizeof(sid));
++    int ret = Request(LOC_STOP, &m);
++    LOGI("stop: %{public}d", ret);
++    WorkingStatus(GnssWorkingStatus::GNSS_WORKING_STATUS_NAVIGATING_END);
++    return ret;
++}
++
++int DisableGnss(void)
++{
++    if (g_fd < 0) {
++        return 0;
++    }
++    StopGnss(0);
++    if (g_readerRunning) {
++        char c = 1;
++        (void)!write(g_stop[1], &c, 1);
++        pthread_join(g_reader, nullptr);
++        g_readerRunning = false;
++    }
++    pthread_mutex_lock(&g_lock);
++    close(g_fd);
++    g_fd = -1;
++    pthread_mutex_unlock(&g_lock);
++    close(g_stop[0]);
++    close(g_stop[1]);
++    g_stop[0] = g_stop[1] = -1;
++    WorkingStatus(GnssWorkingStatus::GNSS_WORKING_STATUS_POWER_OFF);
++    return 0;
++}
++
++int InjectReferenceInfo(int category, GnssReferenceInfo *info)
++{
++    (void)category;
++    (void)info;
++    return 0;
++}
++
++int SetConfigPara(GnssConfigParameter *para)
++{
++    (void)para;
++    return 0;
++}
++
++void RemoveAuxiliaryData(uint16_t flags)
++{
++    (void)flags;
++}
++
++int InjectExtendedEphemeris(char *data, int length)
++{
++    (void)data;
++    (void)length;
++    return 0;
++}
++
++int GetCachedLocationsSize()
++{
++    return 0;
++}
++
++void FlushCachedLocations()
++{
++}
++
++const void *GetModuleIface(int iface)
++{
++    (void)iface;
++    return nullptr;  /* no AGNSS, geofence or measurements */
++}
++
++const GnssVendorInterface g_interface = {
++    sizeof(GnssVendorInterface),
++    EnableGnss,
++    DisableGnss,
++    StartGnss,
++    StopGnss,
++    InjectReferenceInfo,
++    SetConfigPara,
++    RemoveAuxiliaryData,
++    InjectExtendedEphemeris,
++    GetCachedLocationsSize,
++    FlushCachedLocations,
++    GetModuleIface,
++};
++
++const GnssVendorInterface *GetGnssInterface()
++{
++    return &g_interface;
++}
++}  // namespace
++
++/* The HDI looks up the symbol "GnssVendorInterface", which is also the name of the header's interface type: the
++ * asm label gives the object that symbol name. */
++extern "C" __attribute__((visibility("default"))) const GnssVendorDevice g_gnssVendorDevice
++    __asm__("GnssVendorInterface") = {
++    sizeof(GnssVendorDevice),
++    GetGnssInterface,
++};

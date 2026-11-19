@@ -1,0 +1,23 @@
+Allow the OnePlus 6 GNSS vendor library (device/soc/qualcomm 0004) to use hilog through external_deps, as the
+Bluetooth vendor library is (0002): its part (qualcomm_products) has no bundle.json listing its deps.
+
+diff --git a/compile_standard_whitelist.json b/compile_standard_whitelist.json
+index b8955c6..e2d42aa 100644
+--- a/compile_standard_whitelist.json
++++ b/compile_standard_whitelist.json
+@@ -40,6 +40,7 @@
+         "//device/soc/qualcomm/sdm845/hardware/display:libdisplay_buffer_vendor",
+         "//device/soc/qualcomm/sdm845/hardware/display:libdisplay_composer_vdi_impl",
+         "//device/soc/qualcomm/sdm845/hardware/bluetooth:libbt_vendor",
++        "//device/soc/qualcomm/sdm845/hardware/location:vendorGnssAdapter",
+         "//device/soc/qualcomm/sdm845/systemability/pd-mapper:pd-mapper",
+         "//device/soc/qualcomm/sdm845/systemability/qbootctl/frameworks:qboot_ctl",
+         "//device/soc/qualcomm/sdm845/systemability/qbootctl/services:libqbootctl",
+@@ -469,6 +470,7 @@
+         "//device/soc/qualcomm/sdm845/hardware/display:libdisplay_buffer_vendor",
+         "//device/soc/qualcomm/sdm845/hardware/display:libdisplay_composer_vdi_impl",
+         "//device/soc/qualcomm/sdm845/hardware/bluetooth:libbt_vendor",
++        "//device/soc/qualcomm/sdm845/hardware/location:vendorGnssAdapter",
+         "//device/soc/qualcomm/sdm845/hardware/display:libhigbm_vendor",
+         "//device/soc/qualcomm/sdm845/systemability/qpower/services:libqpower",
+         "//device/soc/qualcomm/sdm845/systemability/pd-mapper:pd-mapper",
