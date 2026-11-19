@@ -1,0 +1,20 @@
+English (United States) as the phone's default language and region (OH's own default is Chinese: i18n.para sets
+const.global.language=zh-Hans, locale zh-Hans-CN, region CN). The product parameter file is in the chipset layer,
+which init reads before /system/etc/param; the first value given to a const parameter stands (the same way the
+port's const.distributed_file_property.enabled=false overrides the system's true). A language chosen in Settings
+(persist.global.*) still wins over this default.
+
+diff --git a/fajita/etc/para/product_fajita.para b/fajita/etc/para/product_fajita.para
+index b28a988..a72a21f 100644
+--- a/fajita/etc/para/product_fajita.para
++++ b/fajita/etc/para/product_fajita.para
+@@ -38,3 +38,9 @@ const.SystemCapability.Applications.settings.Core=true
+ # fails StartUser, user 100 is never unlocked, and SceneBoard starts no app that is not a system app
+ # (ERR_BLOCK_START_FIRST_BOOT_SCREEN_UNLOCK).
+ const.distributed_file_property.enabled=false
++
++# OnePlus 6 port: English (United States) by default. OH's i18n.para defaults to Chinese (zh-Hans, CN); this file
++# (chipset layer) is read before /system/etc/param, and the first value given to a const parameter stands.
++const.global.language=en-Latn-US
++const.global.locale=en-Latn-US
++const.global.region=US
