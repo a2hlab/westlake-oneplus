@@ -1,0 +1,24 @@
+sdm845: give the quaternary MI2S codec (the OnePlus 6's MAX98927 speaker amplifier) its I2S format, as mainline
+does. The port's machine driver only set the CPU side to clock master for QUATERNARY_MI2S_RX and never called
+set_fmt on the codec DAI, so the amplifier kept its reset interface format: playback ran (the DSP took the
+stream) but the speaker stayed silent. Measured with the phone's own microphone (ADC3) recording a 1 kHz tone
+played on the speaker (tinyplay/tinycap): 1 kHz at about -110 dBFS without this change, -18.6 dBFS with it.
+
+diff --git a/sound/soc/qcom/sdm845.c b/sound/soc/qcom/sdm845.c
+index 6be7a3293..bcf511ca2 100644
+--- a/sound/soc/qcom/sdm845.c
++++ b/sound/soc/qcom/sdm845.c
+@@ -337,10 +337,12 @@ static int sdm845_snd_startup(struct snd_pcm_substream *substream)
+ 		snd_soc_dai_set_fmt(codec_dai, codec_dai_fmt);
+ 		break;
+ 	case QUATERNARY_MI2S_RX:
++		codec_dai_fmt |= SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_I2S;
+ 		snd_soc_dai_set_sysclk(cpu_dai,
+ 			Q6AFE_LPASS_CLK_ID_QUAD_MI2S_IBIT,
+ 			MI2S_BCLK_RATE, SNDRV_PCM_STREAM_PLAYBACK);
+-		snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_CBS_CFS);
++		snd_soc_dai_set_fmt(cpu_dai, fmt);
++		snd_soc_dai_set_fmt(codec_dai, codec_dai_fmt);
+ 
+ 
+ 		break;
