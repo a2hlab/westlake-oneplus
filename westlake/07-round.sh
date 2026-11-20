@@ -220,10 +220,18 @@ d = json.load(open(sys.argv[1])); print(d.get("child") or "-", d.get("parent") o
     local err=$R/private-tmp/adapter_child_$C.stderr t0 drew="" ok=0 st n left=""
     t0=$(date +%s)
     while [ $(( $(date +%s) - t0 )) -lt "$WAIT" ]; do
-      # STATE <alive> <relayouts> <data free KB> <memory available KB>, or the phone did not answer.
-      st=$(dev "[ -d /proc/$C ] && a=A || a=D; c=\$(grep -c OH_WSA-relayout $err 2>/dev/null);
-        f=\$(df -k /data | tail -1); m=\$(grep MemAvailable /proc/meminfo); set -- \$f; f=\$4; set -- \$m;
-        echo STATE \$a \${c:-0} \$f \$2" | grep -o 'STATE [AD] [0-9]* [0-9]* [0-9]*' | head -1)
+      # STATE <alive> <relayouts> <data free KB> <memory available KB>, or the phone did not answer. One hdc call can
+      # come back empty while the phone runs on (round o70b, 2026-11-20 02:36: the phone was up, and the kernel log
+      # reader kept reading it), so an empty answer is asked again twice, 5 s apart and with a 60 s limit each; the
+      # round stops only when three answers in a row are empty.
+      st=""
+      for try in 1 2 3; do
+        [ "$try" -gt 1 ] && { say "hk-$pkg: no answer to the state check (try $((try - 1)) of 3); asking again"; sleep 5; }
+        st=$(DEV_TIMEOUT=$([ "$try" -gt 1 ] && echo 60 || echo "${DEV_TIMEOUT:-300}") dev "[ -d /proc/$C ] && a=A || a=D;
+          c=\$(grep -c OH_WSA-relayout $err 2>/dev/null); f=\$(df -k /data | tail -1); m=\$(grep MemAvailable /proc/meminfo);
+          set -- \$f; f=\$4; set -- \$m; echo STATE \$a \${c:-0} \$f \$2" | grep -o 'STATE [AD] [0-9]* [0-9]* [0-9]*' | head -1)
+        [ -n "$st" ] && break
+      done
       [ -n "$st" ] || { left="the phone stopped answering"; break; }
       local alive dfree mavail
       read -r _ alive n dfree mavail <<< "$st"
