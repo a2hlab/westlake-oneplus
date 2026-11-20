@@ -57,3 +57,24 @@ camera/host-camera-test.sh capture imx376        # a picture; then imx371, then 
 captures RAW10 with yavta, pulls the last frames and converts them with `camera/raw2png.py` (half-resolution
 demosaic, grey-world balance, gamma; prints per-channel statistics). Each step adds one block to the chain,
 so the first one that fails names the broken part.
+
+## OH camera HDI (rear IMX376K first)
+
+The images have OH's camera framework, the Camera app and the camera host service, but the port never built a
+camera VDI (its `camera/` directory was an unused Unisoc copy), so no camera was published. OH's V4L2 VDI
+expects a camera with an ISP (YUV out of the video node, matched by driver name). CAMSS has no ISP and the
+same driver name on every node, so:
+
+- `device/board/oneplus/0007`: the V4L2 VDI in the board group (one camera, `imx376` = `lcam001`; the
+  software pipeline nodes of OH's USB-camera VDI); `/vendor/bin/camss_setup imx376 1 0 0 0`, run once by init,
+  links `msm_csiphy1 -> msm_csid0 -> msm_vfe0_rdi0` and sets the sensor's format on them; the camera modules
+  installed and loaded at boot; `camera_host` may open `/dev/media*` and `/dev/v4l-subdev*`.
+- `drivers/peripheral/0002`: OH's V4L2 adapter, for the nodes listed in `/vendor/etc/camera/camss_raw.cfg`
+  only, matches the node by name, sets the raw Bayer format and converts each frame to YUV in software
+  (demosaic by 2x2 binning, black level, grey-world white balance, gamma, scaling) with auto exposure on the
+  sensor's exposure and gain controls.
+- `vendor/oneplus/0006`: `camera_host_config.hcs` (one back camera, preview 1280x960/640x480, photo JPEG
+  1280x960), the pipeline config, `camss_raw.cfg`, and the Camera app's `CameraProfiles.json`.
+- `build/0004`: the build checks rk3568's camera VDI has (exec_script allowlist, part-deps whitelist).
+
+The camera targets compile; the images with them have not been built or run yet.

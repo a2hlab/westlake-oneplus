@@ -1,5 +1,5 @@
 #!/bin/bash
-# Static aarch64 media-ctl (v4l-utils) and yavta for the phone, built with the OpenHarmony SDK's clang and musl
+# Static aarch64 media-ctl (v4l-utils), yavta and camss_setup for the phone, built with the OpenHarmony SDK's clang and musl
 # sysroot of the synced tree (prebuilts/ohos-sdk, from 02-prebuilts.sh). They configure the camera's media graph
 # and capture raw frames; neither is part of OpenHarmony. Output: $CAMERA_TOOLS_OUT/{media-ctl,yavta}.
 set -euo pipefail
@@ -30,5 +30,10 @@ echo '#define PACKAGE_VERSION "v4l-utils-'${V4L_UTILS_COMMIT:0:12}'"' > "$OUT/ge
   $V/utils/media-ctl/media-ctl.c $V/utils/media-ctl/options.c $V/utils/media-ctl/libmediactl.c \
   $V/utils/media-ctl/libv4l2subdev.c -o "$OUT/media-ctl"
 "${CC[@]}" -I"$SRC/yavta/include" "$SRC/yavta/yavta.c" -o "$OUT/yavta" -lm
-"$SDK/llvm/bin/llvm-strip" "$OUT/media-ctl" "$OUT/yavta"
-ls -l "$OUT/media-ctl" "$OUT/yavta"
+# camss_setup: the boot-time graph setup of the OH camera patches (device/board/oneplus 0007), static, to try it
+# on a RAM-booted phone before images are built (host-camera-test.sh verify-setup)
+CS=$OH_ROOT/device/board/oneplus/fajita/camera/camss_setup/camss_setup.c
+[ -f "$CS" ] || die "$CS missing (03-apply-patches.sh with patches/oh/device/board/oneplus/0007)"
+"${CC[@]}" -Wall -Wextra "$CS" -o "$OUT/camss_setup"
+"$SDK/llvm/bin/llvm-strip" "$OUT/media-ctl" "$OUT/yavta" "$OUT/camss_setup"
+ls -l "$OUT/media-ctl" "$OUT/yavta" "$OUT/camss_setup"

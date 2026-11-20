@@ -13,9 +13,9 @@ for m in drivers/media/platform/qcom/camss/qcom-camss.ko drivers/media/v4l2-core
   [ -s "$KERNEL_OUT/$m" ] || die "$KERNEL_OUT/$m missing (patches/kernel/0005-0007 applied? 04-build-kernel.sh run?)"
   cp "$KERNEL_OUT/$m" "$A/"
 done
-for t in media-ctl yavta; do [ -x "$T/$t" ] || die "$T/$t missing (run camera/build-tools.sh)"; cp "$T/$t" "$A/"; done
-cp "$here/cam-load.sh" "$here/cam-capture.sh" "$A/"
+for t in media-ctl yavta camss_setup; do [ -x "$T/$t" ] || die "$T/$t missing (run camera/build-tools.sh)"; cp "$T/$t" "$A/"; done
+cp "$here/cam-load.sh" "$here/cam-capture.sh" "$here/cam-verify-setup.sh" "$A/"
 cp "$KERNEL_OUT/arch/arm64/boot/dts/qcom/sdm845-oneplus-enchilada.dtb" "$A/enchilada-cam.dtb"
 BOOT_IMG="$A/boot-oneplus6-camera.img" "$here/../scripts/06-make-boot.sh"
-(cd "$A" && sha256sum boot-oneplus6-camera.img enchilada-cam.dtb *.ko media-ctl yavta cam-*.sh > SHA256SUMS)
+(cd "$A" && sha256sum boot-oneplus6-camera.img enchilada-cam.dtb *.ko media-ctl yavta camss_setup cam-*.sh > SHA256SUMS)
 echo "test files in $A"

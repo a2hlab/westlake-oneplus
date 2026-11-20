@@ -1,0 +1,1165 @@
+Cameras: OH's camera HDI for the OnePlus 6, first camera the rear Sony IMX376K (kernel patches 0005-0007 provide
+the drivers). Not yet run on the phone; the camera targets compile in an isolated build of this tree.
+
+The port's camera/ directory was a Unisoc (wukong100) copy that nothing in the build depended on, and it would
+not have worked if wired (Unisoc part, sensor classes and adapter, sprd codecs, rk3568 pipeline node names).
+- camera/vdi_impl/v4l2: an rk3568-style V4L2 VDI in the board group (part qualcomm_products): the device
+  manager lists one camera, imx376 (CAMERA_FIRST = lcam001); the pipeline uses the software nodes of OH's
+  USB-camera VDI (scale, JPEG codec, exif, face) instead of rk3568's RK* nodes.
+- camera/camss_setup: /vendor/bin/camss_setup, run once by init (service camss_setup, started in the boot
+  job): waits for the sensor to bind, enables msm_csiphy1 -> msm_csid0 -> msm_vfe0_rdi0 and sets the sensor's
+  current format (code and size: the Bayer order follows its flips) on those pads. CAMSS has no ISP, the
+  graph carries raw Bayer end to end; OH's V4L2 adapter (drivers/peripheral 0002) converts it.
+- cfg/ueventd.config: camera_host may open /dev/media* and /dev/v4l-subdev* (format of the RDI subdev,
+  exposure and gain on the sensor subdev).
+- modules: the camera modules are installed (modules_path_194.gni) and loaded at boot (modules.load).
+
+diff --git a/fajita/BUILD.gn b/fajita/BUILD.gn
+index f5b9e40fc97d6d1bb9fd6d4cbc2ebcefa93e90cf..8aad0ed7ed3067f443d3952dbddcbdd6226eec30 100644
+--- a/fajita/BUILD.gn
++++ b/fajita/BUILD.gn
+@@ -24,6 +24,10 @@ group("fajita_group") {
+     "test:test",
+     # "drivers/bluetooth:libbt_vendor",
+     "napi_module:napi_module",
++    # Camera HDI: board V4L2 VDI (libcamera_host_vdi_impl_1.0.z.so), its hcb configs and pipeline, and the
++    # one-shot CAMSS media graph setup run by init (camss_setup)
++    "camera/vdi_impl/v4l2:camera_board_vdi_impl",
++    "camera/camss_setup:camss_setup",
+     "//device/soc/qualcomm/sdm845/hardware/display:display_buffer_model",
+     "//device/soc/qualcomm/sdm845/hardware/display:display_composer_model",
+     "//device/soc/qualcomm/sdm845/hardware:hardware_group",
+diff --git a/fajita/camera/camss_setup/BUILD.gn b/fajita/camera/camss_setup/BUILD.gn
+new file mode 100644
+index 0000000000000000000000000000000000000000..e1a563b9036db5c18fb650705758aa7c1a59d5ee
+--- /dev/null
++++ b/fajita/camera/camss_setup/BUILD.gn
+@@ -0,0 +1,24 @@
++# Copyright (c) 2026 OnePlus 6 OpenHarmony port.
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++import("//build/ohos.gni")
++
++# /vendor/bin/camss_setup: links and formats of the Qualcomm CAMSS media graph for a raw camera, run once by
++# init (service camss_setup in init.fajita.cfg) before camera_host streams from it.
++ohos_executable("camss_setup") {
++  sources = [ "camss_setup.c" ]
++  cflags = [ "-Wall", "-Wextra" ]
++  install_enable = true
++  install_images = [ chipset_base_dir ]
++  part_name = "qualcomm_products"
++}
+diff --git a/fajita/camera/camss_setup/camss_setup.c b/fajita/camera/camss_setup/camss_setup.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..45a1d7af1924c6fc3a9ff57021d915dcae29b3f8
+--- /dev/null
++++ b/fajita/camera/camss_setup/camss_setup.c
+@@ -0,0 +1,279 @@
++/*
++ * Copyright (c) 2026 OnePlus 6 OpenHarmony port.
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/*
++ * camss_setup: configure the Qualcomm CAMSS media graph for one raw camera, once, at boot
++ * (what "media-ctl -l ... -V ..." does, without shipping media-ctl).
++ *
++ *   camss_setup SENSOR CSIPHY CSID VFE RDI [WAIT_S]
++ *   e.g. camss_setup imx376 1 0 0 0     OnePlus 6 rear IMX376K: msm_csiphy1 -> msm_csid0 -> msm_vfe0_rdi0
++ *
++ * Waits up to WAIT_S seconds (default 15) for the sensor entity ("SENSOR <bus>-<addr>") to appear in the
++ * CAMSS media device (it appears when the sensor driver binds), enables the links
++ * msm_csiphyN:1 -> msm_csidM:0 and msm_csidM:(1+RDI) -> msm_vfeK_rdiRDI:0, and sets the sensor's current
++ * format (code and size, so the Bayer order follows its flip controls) on the sink pads of the CSIPHY,
++ * CSID and VFE line. Prints the capture node (msm_vfeK_videoRDI). Exit 0 on success.
++ */
++#include <dirent.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/ioctl.h>
++#include <sys/stat.h>
++#include <sys/sysmacros.h>
++#include <time.h>
++#include <unistd.h>
++#include <linux/media.h>
++#include <linux/v4l2-subdev.h>
++
++#define MAX_ENTITIES 128
++
++struct ent {
++	unsigned int id;
++	char name[32];
++	unsigned int major, minor;
++};
++
++static struct ent ents[MAX_ENTITIES];
++static int n_ents;
++
++static void logk(const char *fmt, const char *a, const char *b)
++{
++	char line[256];
++	int fd;
++
++	snprintf(line, sizeof(line), fmt, a ? a : "", b ? b : "");
++	fprintf(stderr, "camss_setup: %s\n", line);
++	fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
++	if (fd >= 0) {
++		dprintf(fd, "camss_setup: %s\n", line);
++		close(fd);
++	}
++}
++
++static int open_camss(void)
++{
++	char path[32];
++	int i, fd;
++
++	for (i = 0; i < 16; i++) {
++		struct media_device_info info;
++
++		snprintf(path, sizeof(path), "/dev/media%d", i);
++		fd = open(path, O_RDWR | O_CLOEXEC);
++		if (fd < 0)
++			continue;
++		memset(&info, 0, sizeof(info));
++		if (ioctl(fd, MEDIA_IOC_DEVICE_INFO, &info) == 0 &&
++		    strcmp(info.driver, "qcom-camss") == 0)
++			return fd;
++		close(fd);
++	}
++	return -1;
++}
++
++static int load_entities(int fd)
++{
++	struct media_entity_desc d;
++
++	n_ents = 0;
++	memset(&d, 0, sizeof(d));
++	d.id = MEDIA_ENT_ID_FLAG_NEXT;
++	while (n_ents < MAX_ENTITIES && ioctl(fd, MEDIA_IOC_ENUM_ENTITIES, &d) == 0) {
++		struct ent *e = &ents[n_ents++];
++
++		e->id = d.id;
++		snprintf(e->name, sizeof(e->name), "%s", d.name);
++		e->major = d.dev.major;
++		e->minor = d.dev.minor;
++		d.id |= MEDIA_ENT_ID_FLAG_NEXT;
++	}
++	return n_ents;
++}
++
++static struct ent *find_exact(const char *name)
++{
++	int i;
++
++	for (i = 0; i < n_ents; i++)
++		if (strcmp(ents[i].name, name) == 0)
++			return &ents[i];
++	return NULL;
++}
++
++static struct ent *find_sensor(const char *prefix)
++{
++	size_t n = strlen(prefix);
++	int i;
++
++	for (i = 0; i < n_ents; i++)
++		if (strncmp(ents[i].name, prefix, n) == 0 && ents[i].name[n] == ' ')
++			return &ents[i];
++	return NULL;
++}
++
++/* the /dev node of an entity, from its char device number */
++static int devnode(const struct ent *e, char *out, size_t len)
++{
++	DIR *dir = opendir("/dev");
++	struct dirent *de;
++	int found = -1;
++
++	if (!dir)
++		return -1;
++	while ((de = readdir(dir)) != NULL) {
++		char p[300];
++		struct stat st;
++
++		if (strncmp(de->d_name, "v4l-subdev", 10) && strncmp(de->d_name, "video", 5))
++			continue;
++		snprintf(p, sizeof(p), "/dev/%s", de->d_name);
++		if (stat(p, &st) == 0 && S_ISCHR(st.st_mode) &&
++		    major(st.st_rdev) == e->major && minor(st.st_rdev) == e->minor) {
++			snprintf(out, len, "%s", p);
++			found = 0;
++			break;
++		}
++	}
++	closedir(dir);
++	return found;
++}
++
++static int setup_link(int fd, const struct ent *src, int src_pad, const struct ent *sink, int sink_pad)
++{
++	struct media_link_desc l;
++
++	memset(&l, 0, sizeof(l));
++	l.source.entity = src->id;
++	l.source.index = src_pad;
++	l.sink.entity = sink->id;
++	l.sink.index = sink_pad;
++	l.flags = MEDIA_LNK_FL_ENABLED;
++	if (ioctl(fd, MEDIA_IOC_SETUP_LINK, &l) < 0) {
++		logk("link %s -> %s failed", src->name, sink->name);
++		return -1;
++	}
++	return 0;
++}
++
++static int subdev_fmt(const struct ent *e, int pad, struct v4l2_mbus_framefmt *fmt, int set)
++{
++	struct v4l2_subdev_format f;
++	char node[64];
++	int fd, ret;
++
++	if (devnode(e, node, sizeof(node)) < 0) {
++		logk("no device node for %s%s", e->name, NULL);
++		return -1;
++	}
++	fd = open(node, O_RDWR | O_CLOEXEC);
++	if (fd < 0) {
++		logk("cannot open %s (%s)", node, strerror(errno));
++		return -1;
++	}
++	memset(&f, 0, sizeof(f));
++	f.which = V4L2_SUBDEV_FORMAT_ACTIVE;
++	f.pad = pad;
++	if (set)
++		f.format = *fmt;
++	ret = ioctl(fd, set ? VIDIOC_SUBDEV_S_FMT : VIDIOC_SUBDEV_G_FMT, &f);
++	close(fd);
++	if (ret < 0) {
++		logk("%s format on %s failed", set ? "set" : "get", e->name);
++		return -1;
++	}
++	if (set && (f.format.code != fmt->code || f.format.width != fmt->width ||
++		    f.format.height != fmt->height)) {
++		logk("%s changed the format%s", e->name, NULL);
++		return -1;
++	}
++	*fmt = f.format;
++	return 0;
++}
++
++int main(int argc, char **argv)
++{
++	char name[32], node[64], msg[128];
++	struct ent *sensor = NULL, *phy, *csid, *rdi, *vid;
++	struct v4l2_mbus_framefmt fmt;
++	int fd, waited, wait_s;
++	int nphy, ncsid, nvfe, nrdi;
++
++	if (argc < 6) {
++		fprintf(stderr, "usage: %s SENSOR CSIPHY CSID VFE RDI [WAIT_S]\n", argv[0]);
++		return 2;
++	}
++	nphy = atoi(argv[2]);
++	ncsid = atoi(argv[3]);
++	nvfe = atoi(argv[4]);
++	nrdi = atoi(argv[5]);
++	wait_s = argc > 6 ? atoi(argv[6]) : 15;
++
++	/* the entity appears when the sensor binds, its /dev node (ueventd) shortly after */
++	for (waited = 0; ; waited++) {
++		int have_media;
++
++		fd = open_camss();
++		have_media = fd >= 0;
++		if (have_media) {
++			load_entities(fd);
++			sensor = find_sensor(argv[1]);
++			if (sensor && devnode(sensor, node, sizeof(node)) == 0)
++				break;
++			close(fd);
++		}
++		if (waited >= wait_s * 10) {
++			logk(have_media ? "no %s sensor (entity and device node) in the CAMSS media graph" :
++					  "no qcom-camss media device (waiting for %s)", argv[1], NULL);
++			return 1;
++		}
++		usleep(100000);
++	}
++
++	snprintf(name, sizeof(name), "msm_csiphy%d", nphy);
++	phy = find_exact(name);
++	snprintf(name, sizeof(name), "msm_csid%d", ncsid);
++	csid = find_exact(name);
++	snprintf(name, sizeof(name), "msm_vfe%d_rdi%d", nvfe, nrdi);
++	rdi = find_exact(name);
++	snprintf(name, sizeof(name), "msm_vfe%d_video%d", nvfe, nrdi);
++	vid = find_exact(name);
++	if (!phy || !csid || !rdi || !vid) {
++		logk("CAMSS entities missing (csiphy/csid/vfe/video)%s%s", NULL, NULL);
++		return 1;
++	}
++
++	/* the sensor -> CSIPHY link is immutable; enable CSIPHY -> CSID -> VFE line */
++	if (setup_link(fd, phy, 1, csid, 0) < 0 || setup_link(fd, csid, 1 + nrdi, rdi, 0) < 0)
++		return 1;
++
++	memset(&fmt, 0, sizeof(fmt));
++	if (subdev_fmt(sensor, 0, &fmt, 0) < 0)
++		return 1;
++	fmt.field = V4L2_FIELD_NONE;
++	if (subdev_fmt(phy, 0, &fmt, 1) < 0 || subdev_fmt(csid, 0, &fmt, 1) < 0 ||
++	    subdev_fmt(rdi, 0, &fmt, 1) < 0)
++		return 1;
++
++	if (devnode(vid, node, sizeof(node)) < 0)
++		snprintf(node, sizeof(node), "(no node)");
++	snprintf(msg, sizeof(msg), "code 0x%04x %ux%u -> %s", fmt.code, fmt.width, fmt.height, node);
++	logk("%s: %s", sensor->name, msg);
++	printf("%s\n", node);
++	close(fd);
++	return 0;
++}
+diff --git a/fajita/camera/vdi_impl/v4l2/BUILD.gn b/fajita/camera/vdi_impl/v4l2/BUILD.gn
+index c1d00bb10f11b25e850de8cdc5d60d7d737d551a..03588184cc2dd546b0df950869c9824950513c93 100644
+--- a/fajita/camera/vdi_impl/v4l2/BUILD.gn
++++ b/fajita/camera/vdi_impl/v4l2/BUILD.gn
+@@ -11,11 +11,16 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
++# OnePlus 6 (sdm845) camera VDI. Same layout as the OH 7.0 rk3568 board VDI
++# (device/board/hihope/rk3568/camera/vdi_impl/v4l2/BUILD.gn); the Unisoc parts that
++# came with the wukong100 copy (part "device_wukong100", sprd codec, V4l2AdapterInterface)
++# are not used. Raw Bayer from Qualcomm CAMSS is turned into YUV by the common V4L2
++# adapter (camss_raw.cpp, see drivers/peripheral/camera), configured by camss_raw.cfg.
++
+ import("//build/ohos.gni")
+ import("//device/board/${product_company}/${device_name}/device.gni")
+-import("//drivers/hdf_core/adapter/uhdf2/uhdf.gni")
+ import("//drivers/peripheral/camera/camera.gni")
+-import("$hdf_framework_path/tools/hc-gen/hc_gen.gni")
++import("//build/config/components/hc_gen/hc_gen.gni")
+ 
+ hc_gen("build_camera_host_config") {
+   sources = [ rebase_path(
+@@ -28,7 +33,6 @@ ohos_prebuilt_etc("camera_host_config.hcb") {
+   source = hcs_outputs[0]
+   relative_install_dir = "hdfconfig"
+   install_images = [ chipset_base_dir ]
+-  install_enable = true
+   part_name = "qualcomm_products"
+ }
+ 
+@@ -41,15 +45,11 @@ hc_gen_c("generate_source") {
+ 
+ action("copy_source") {
+   script = "/usr/bin/env"
+-  outputs = [
+-      "$root_out_dir/../../drivers/peripheral/camera/vdi_base/common/pipeline_core/pipeline_impl/src/strategy/config/config.c",
+-      "$root_out_dir/../../drivers/peripheral/camera/vdi_base/common/pipeline_core/pipeline_impl/src/strategy/config/params.c"
+-  ]
++  outputs = [ "$target_out_dir/tmp.c" ]  # no use, just for gn complains
+   args = [
+     "cp",
+     "-f",
+   ]
+-
+   args += rebase_path(get_target_outputs(":generate_source"))
+   args += [ rebase_path(
+           "$camera_path/pipeline_core/pipeline_impl/src/strategy/config/") ]
+@@ -58,28 +58,24 @@ action("copy_source") {
+ 
+ ohos_prebuilt_etc("config.c") {
+   deps = [ ":copy_source" ]
+-  source =
+-      "$camera_path/pipeline_core/pipeline_impl/src/strategy/config/config.c"
+-  # exec_script(
+-  #     "/usr/bin/env",
+-  #     [
+-  #       "touch",
+-  #       rebase_path(
+-  #           "$camera_path/pipeline_core/pipeline_impl/src/strategy/config/config.c"),
+-  #     ])
++  source = "$camera_path/pipeline_core/pipeline_impl/src/strategy/config/config.c"
++  exec_script("/usr/bin/env",
++              [
++                "touch",
++                rebase_path(
++                    "$camera_path/pipeline_core/pipeline_impl/src/strategy/config/config.c"),
++              ])
+ }
+ 
+ ohos_prebuilt_etc("params.c") {
+   deps = [ ":copy_source" ]
+-  source =
+-      "$camera_path/pipeline_core/pipeline_impl/src/strategy/config/params.c"
+-  # exec_script(
+-  #     "/usr/bin/env",
+-  #     [
+-  #       "touch",
+-  #       rebase_path(
+-  #           "$camera_path/pipeline_core/pipeline_impl/src/strategy/config/params.c"),
+-  #     ])
++  source = "$camera_path/pipeline_core/pipeline_impl/src/strategy/config/params.c"
++  exec_script("/usr/bin/env",
++              [
++                "touch",
++                rebase_path(
++                    "$camera_path/pipeline_core/pipeline_impl/src/strategy/config/params.c"),
++              ])
+ }
+ 
+ hc_gen("build_ipp_algo_config") {
+@@ -93,7 +89,15 @@ ohos_prebuilt_etc("ipp_algo_config.hcb") {
+   source = hcs_outputs[0]
+   relative_install_dir = "hdfconfig"
+   install_images = [ chipset_base_dir ]
+-  install_enable = true
++  part_name = "qualcomm_products"
++}
++
++# /vendor/etc/camera/camss_raw.cfg: which CAMSS video node and sensor belong to which
++# hardware name of device_manager/include/project_hardware.h, and the raw format to set.
++ohos_prebuilt_etc("camss_raw.cfg") {
++  source = "$product_config_path/hdf_config/uhdf/camera/camss_raw.cfg"
++  relative_install_dir = "camera"
++  install_images = [ chipset_base_dir ]
+   part_name = "qualcomm_products"
+ }
+ 
+@@ -110,6 +114,7 @@ config("example_config") {
+ group("chipset_build") {
+   public_deps = [
+     ":camera_host_config.hcb",
++    ":camss_raw.cfg",
+     ":config.c",
+     ":ipp_algo_config.hcb",
+     ":params.c",
+@@ -160,7 +165,6 @@ host_includes = [
+   "$camera_path/include",
+   "$camera_path/metadata_manager/include",
+   "$camera_path/utils/watchdog",
+-  "$camera_path/dump/include",
+   "$camera_path/../interfaces",
+   "$camera_path/../v4l2/include",
+   "$camera_path/../v4l2/include/camera_host",
+@@ -172,6 +176,7 @@ host_includes = [
+   "$camera_path/buffer_manager/src/buffer_adapter/standard",
+   "$camera_path/utils/event",
+   "$camera_path/../../display/interfaces/include",
++  "$camera_path/dump/include",
+ 
+   #producer
+   "$camera_path/pipeline_core/utils",
+@@ -209,98 +214,33 @@ ohos_shared_library("camera_host_vdi_impl_1.0") {
+     defines += [ "CAMERA_BUILT_ON_USB" ]
+   }
+ 
+-  if (is_standard_system) {
+-    external_deps = [
+-      "c_utils:utils",
+-      "drivers_peripheral_camera:peripheral_camera_buffer_manager",
+-      "drivers_peripheral_camera:peripheral_camera_device_manager",
+-      "drivers_peripheral_camera:peripheral_camera_metadata_manager",
+-      "drivers_peripheral_camera:peripheral_camera_pipeline_core",
+-      "drivers_peripheral_camera:peripheral_camera_utils",
+-      "drivers_peripheral_camera:peripheral_camera_v4l2_adapter",
+-      "graphic_surface:surface",
+-      "hdf_core:libhdf_host",
+-      "hdf_core:libhdf_ipc_adapter",
+-      "hdf_core:libhdf_utils",
+-      "hisysevent:libhisysevent",
+-      "hdf_core:libhdi",
+-      "hilog:libhilog",
+-      "ipc:ipc_single",
+-    ]
+-    if (use_hitrace) {
+-      external_deps += [ "hitrace:libhitracechain" ]
+-    }
+-  } else {
+-    external_deps = [ "hilog:libhilog" ]
+-  }
+-  external_deps += [
++  external_deps = [
++    "c_utils:utils",
+     "drivers_interface_camera:libbuffer_producer_sequenceable_1.0",
+     "drivers_interface_camera:metadata",
+     "drivers_interface_display:libdisplay_composer_proxy_1.0",
++    "drivers_peripheral_camera:peripheral_camera_buffer_manager",
++    "drivers_peripheral_camera:peripheral_camera_device_manager",
++    "drivers_peripheral_camera:peripheral_camera_metadata_manager",
++    "drivers_peripheral_camera:peripheral_camera_pipeline_core",
++    "drivers_peripheral_camera:peripheral_camera_utils",
++    "drivers_peripheral_camera:peripheral_camera_v4l2_adapter",
++    "graphic_surface:surface",
++    "hdf_core:libhdf_host",
++    "hdf_core:libhdf_ipc_adapter",
++    "hdf_core:libhdf_utils",
++    "hdf_core:libhdi",
++    "hilog:libhilog",
++    "hisysevent:libhisysevent",
+     "hitrace:hitrace_meter",
+     "ipc:ipc_single",
+   ]
+-  public_configs = [ ":camhdi_impl_config" ]
+-  install_images = [ chipset_base_dir ]
+-  install_enable = true
+-  part_name = "device_wukong100"
+-  subsystem_name = "device_wukong100"
+-}
+-
+-ohos_static_library("camera_host_vdi_impl_1.0_static") {
+-  sources = host_sources
+-  include_dirs = host_includes
+-
+-  deps = [
+-    "$board_camera_path/device_manager:camera_device_manager",
+-    "$board_camera_path/pipeline_core:camera_pipeline_core",
+-  ]
+-
+-  defines = []
+-  if (enable_camera_device_utest) {
+-    defines += [ "CAMERA_DEVICE_UTEST" ]
+-  }
+   if (use_hitrace) {
+-    defines += [ "HITRACE_LOG_ENABLED" ]
++    external_deps += [ "hitrace:libhitracechain" ]
+   }
+-  if (drivers_peripheral_camera_feature_usb) {
+-    defines += [ "CAMERA_BUILT_ON_USB" ]
+-  }
+-
+-  if (is_standard_system) {
+-    external_deps = [
+-      "c_utils:utils",
+-      "drivers_peripheral_camera:peripheral_camera_buffer_manager",
+-      "drivers_peripheral_camera:peripheral_camera_device_manager",
+-      "drivers_peripheral_camera:peripheral_camera_metadata_manager",
+-      "drivers_peripheral_camera:peripheral_camera_pipeline_core",
+-      "drivers_peripheral_camera:peripheral_camera_utils",
+-      "graphic_surface:surface",
+-      "hdf_core:libhdf_host",
+-      "hdf_core:libhdf_ipc_adapter",
+-      "hdf_core:libhdf_utils",
+-      "hdf_core:libhdi",
+-      "hilog:libhilog",
+-      "hitrace:hitrace_meter",
+-      "ipc:ipc_single",
+-    ]
+-    if (use_hitrace) {
+-      external_deps += [ "hitrace:libhitracechain" ]
+-    }
+-  } else {
+-    external_deps = [ "hilog:libhilog" ]
+-  }
+-  external_deps += [
+-    "drivers_interface_camera:libbuffer_producer_sequenceable_1.0",
+-    "drivers_interface_camera:metadata",
+-    "drivers_interface_display:libdisplay_composer_proxy_1.0",
+-    "hitrace:hitrace_meter",
+-    "ipc:ipc_single",
+-  ]
+-
+   public_configs = [ ":camhdi_impl_config" ]
+-  part_name = "device_wukong100"
+-  subsystem_name = "device_wukong100"
++  install_images = [ chipset_base_dir ]
++  part_name = "qualcomm_products"
+ }
+ 
+ ohos_shared_library("camera_pipeline_config") {
+@@ -310,36 +250,23 @@ ohos_shared_library("camera_pipeline_config") {
+   ]
+   include_dirs =
+       [ "$camera_path/pipeline_core/pipeline_impl/src/strategy/config" ]
++  deps = [
++    ":config.c",
++    ":params.c",
++  ]
+   install_images = [ chipset_base_dir ]
+-  part_name = "device_wukong100"
+-  subsystem_name = "device_wukong100"
++  part_name = "qualcomm_products"
+ }
+ 
+ group("camera_board_vdi_impl") {
+   deps = [
+     ":camera_host_vdi_impl_1.0",
+-    ":chipset_build",
+     ":camera_pipeline_config",
++    ":chipset_build",
+   ]
+ }
+ 
+ group("camera_board_test") {
+-  if (target_cpu == "x86_64") {
+-    deps = []
+-  } else {
+-    testonly = true
+-    deps = [
+-      #device manager test
+-      #"device_manager/test/unittest:camera_board_device_manager_unittest",
+-
+-      #driver adapter v4l2 unittest
+-      #"driver_adapter/test/unittest:v4l2_adapter_unittest",
+-
+-      # pipeline core test
+-      #"pipeline_core/test/unittest:camera_pipeline_core_test_ut",
+-
+-      # demo test
+-      #"demo:ohos_camera_demo",
+-    ]
+-  }
+-}
+\ No newline at end of file
++  testonly = true
++  deps = []
++}
+diff --git a/fajita/camera/vdi_impl/v4l2/device_manager/BUILD.gn b/fajita/camera/vdi_impl/v4l2/device_manager/BUILD.gn
+index 30f641866c6650fdedcc464ded05eeefe6b60bea..5386e819006018a731dc7ec33388c1d957bd1ca4 100644
+--- a/fajita/camera/vdi_impl/v4l2/device_manager/BUILD.gn
++++ b/fajita/camera/vdi_impl/v4l2/device_manager/BUILD.gn
+@@ -43,44 +43,26 @@ config("device_manager_config") {
+   ]
+ }
+ 
++# The common V4L2 device manager compiled against this board's project_hardware.h
++# (the table of sensors: hardware name per CameraId).
+ ohos_shared_library("camera_device_manager") {
+   sources = [
+     "$camera_path/adapter/platform/v4l2/src/device_manager/idevice_manager.cpp",
+     "$camera_path/adapter/platform/v4l2/src/device_manager/v4l2_device_manager.cpp",
+-    "$board_camera_path/device_manager/src/gc05a2.cpp",
+-    "$board_camera_path/device_manager/src/ov50c40.cpp",
+-    "$board_camera_path/device_manager/src/bf2257cs.cpp",
++    "src/imx376.cpp",
+   ]
+ 
+-  include_dirs = [
+-    "//base/hiviewdfx/interfaces/innerkits/libhilog/include",
++  include_dirs = [ "./include" ]
+ 
+-    "include",
+-    "//commonlibrary/c_utils/base/include",
+-
+-    "//base/startup/init/interfaces/innerkits/include/syspara/",
++  external_deps = [
++    "c_utils:utils",
++    "drivers_interface_camera:metadata",
++    "drivers_peripheral_camera:peripheral_camera_device_manager",
++    "drivers_peripheral_camera:peripheral_camera_v4l2_adapter",
++    "hdf_core:libhdf_utils",
++    "hilog:libhilog",
+   ]
+-
+-  deps = []
+-  
+-  if (is_standard_system) {
+-    external_deps = [
+-      "c_utils:utils",
+-      "drivers_peripheral_camera:peripheral_camera_device_manager",
+-      "drivers_peripheral_camera:peripheral_camera_v4l2_adapter",
+-      "hdf_core:libhdf_utils",
+-      "hilog:libhilog",
+-      "init:libbegetutil",
+-    ]
+-  } else {
+-    external_deps = [
+-      "c_utils:utils",
+-      "hilog:libhilog",
+-    ]
+-  }
+-  external_deps += [ "drivers_interface_camera:metadata" ]
+   public_configs = [ ":device_manager_config" ]
+   install_images = [ chipset_base_dir ]
+-  install_enable = true
+   part_name = "qualcomm_products"
+ }
+diff --git a/fajita/camera/vdi_impl/v4l2/device_manager/include/imx376.h b/fajita/camera/vdi_impl/v4l2/device_manager/include/imx376.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..128065f6f6890b2ef752bbeb5b63f1652460be2f
+--- /dev/null
++++ b/fajita/camera/vdi_impl/v4l2/device_manager/include/imx376.h
+@@ -0,0 +1,43 @@
++/*
++ * Copyright (c) 2026 OnePlus 6 OpenHarmony port.
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef HOS_CAMERA_IMX376_H
++#define HOS_CAMERA_IMX376_H
++
++#include "isensor.h"
++#include "create_sensor_factory.h"
++#include "device_manager_adapter.h"
++
++namespace OHOS::Camera {
++// Sony IMX376K, OnePlus 6 rear camera (CSIPHY1, 4 lanes, 2592x1940 RAW10 at 30 fps).
++// Same shape as the rk3568 Rkispv5 sensor. In OH 7.0 the V4L2 VDI does not call
++// IDeviceManager::GetSensor at run time (only the unit tests do); the camera abilities
++// come from camera_host_config.hcs. The class registers itself as "Imx376".
++class Imx376 : public ISensor {
++    DECLARE_SENSOR(Imx376)
++public:
++    Imx376();
++    virtual ~Imx376();
++    void InitSensitivityRange(Camera::CameraMetadata& camera_meta_data);
++    void InitAwbModes(Camera::CameraMetadata& camera_meta_data);
++    void InitCompensationRange(Camera::CameraMetadata& camera_meta_data);
++    void InitFpsTarget(Camera::CameraMetadata& camera_meta_data);
++    void InitAvailableModes(Camera::CameraMetadata& camera_meta_data);
++    void InitAntiBandingModes(Camera::CameraMetadata& camera_meta_data);
++    void InitPhysicalSize(Camera::CameraMetadata& camera_meta_data);
++    void Init(Camera::CameraMetadata& camera_meta_data);
++};
++} // namespace OHOS::Camera
++#endif
+diff --git a/fajita/camera/vdi_impl/v4l2/device_manager/include/project_hardware.h b/fajita/camera/vdi_impl/v4l2/device_manager/include/project_hardware.h
+index 8583ea00018ad1a04452188aa0e75696d16257cd..b5ca31f592064704340b1a2cd4503928e64e4302 100644
+--- a/fajita/camera/vdi_impl/v4l2/device_manager/include/project_hardware.h
++++ b/fajita/camera/vdi_impl/v4l2/device_manager/include/project_hardware.h
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2021 Huawei Device Co., Ltd.
++ * Copyright (c) 2021 - 2023 Huawei Device Co., Ltd.
+  * Licensed under the Apache License, Version 2.0 (the "License");
+  * you may not use this file except in compliance with the License.
+  * You may obtain a copy of the License at
+@@ -17,16 +17,20 @@
+ #define HOS_CAMERA_PROJET_HARDWARE_H
+ 
+ namespace OHOS::Camera {
++/*
++ * OnePlus 6: one entry block per camera. The DM_C_SENSOR name is the key used everywhere:
++ * - V4L2DeviceManager::Init hands it to HosV4L2Dev::Init, which matches it against the
++ *   VIDIOC_QUERYCAP driver name of /dev/video0..23 or, for Qualcomm CAMSS, against the
++ *   "hw=" entries of /vendor/etc/camera/camss_raw.cfg (video node name, raw format, sensor);
++ * - the SensorController of that camera is named after it.
++ * CAMERA_FIRST is logic camera "lcam001" (V4L2SourceNode's fixed lcam00N -> CameraId table)
++ * and camera_host_config.hcs maps lcam001 -> physicsCameraIds "CAMERA_FIRST".
++ * Later cameras: {CAMERA_SECOND, ..., "imx371"} (front), {CAMERA_THIRD, ..., "imx519"}.
++ */
+ std::vector<HardwareConfiguration> hardware = {
+-    {CAMERA_FIRST, DM_M_SENSOR, DM_C_SENSOR, (std::string) "ov50c40"},
++    {CAMERA_FIRST, DM_M_SENSOR, DM_C_SENSOR, (std::string) "imx376"},
+     {CAMERA_FIRST, DM_M_ISP, DM_C_ISP, (std::string) "isp"},
+     {CAMERA_FIRST, DM_M_FLASH, DM_C_FLASH, (std::string) "flash"},
+-    {CAMERA_SECOND, DM_M_SENSOR, DM_C_SENSOR, (std::string) "gc05a2"},
+-    {CAMERA_SECOND, DM_M_ISP, DM_C_ISP, (std::string) "isp"},
+-    {CAMERA_SECOND, DM_M_FLASH, DM_C_FLASH, (std::string) "flash"},
+-    {CAMERA_THIRD, DM_M_SENSOR, DM_C_SENSOR, (std::string) "bf2257cs"},
+-    {CAMERA_THIRD, DM_M_ISP, DM_C_ISP, (std::string) "isp"},
+-    {CAMERA_THIRD, DM_M_FLASH, DM_C_FLASH, (std::string) "flash"}
+ };
+ } // namespace OHOS::Camera
+ #endif
+diff --git a/fajita/camera/vdi_impl/v4l2/device_manager/src/imx376.cpp b/fajita/camera/vdi_impl/v4l2/device_manager/src/imx376.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..3092a90bc0d104540070ef52539bd39983bf261d
+--- /dev/null
++++ b/fajita/camera/vdi_impl/v4l2/device_manager/src/imx376.cpp
+@@ -0,0 +1,77 @@
++/*
++ * Copyright (c) 2026 OnePlus 6 OpenHarmony port.
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include "imx376.h"
++#include <vector>
++
++namespace OHOS::Camera {
++IMPLEMENT_SENSOR(Imx376)
++Imx376::Imx376() : ISensor("imx376") {}
++
++Imx376::~Imx376() {}
++
++void Imx376::InitPhysicalSize(Camera::CameraMetadata& camera_meta_data)
++{
++    ISensor::InitPhysicalSize(camera_meta_data);
++}
++
++void Imx376::InitAntiBandingModes(Camera::CameraMetadata& camera_meta_data)
++{
++    ISensor::InitAntiBandingModes(camera_meta_data);
++}
++
++void Imx376::InitAvailableModes(Camera::CameraMetadata& camera_meta_data)
++{
++    ISensor::InitAvailableModes(camera_meta_data);
++}
++
++void Imx376::InitFpsTarget(Camera::CameraMetadata& camera_meta_data)
++{
++    ISensor::InitFpsTarget(camera_meta_data);
++}
++
++void Imx376::InitCompensationRange(Camera::CameraMetadata& camera_meta_data)
++{
++    ISensor::InitCompensationRange(camera_meta_data);
++}
++
++void Imx376::InitAwbModes(Camera::CameraMetadata& camera_meta_data)
++{
++    ISensor::InitAwbModes(camera_meta_data);
++}
++
++void Imx376::InitSensitivityRange(Camera::CameraMetadata& camera_meta_data)
++{
++    ISensor::InitSensitivityRange(camera_meta_data);
++}
++
++void Imx376::Init(Camera::CameraMetadata& camera_metaData)
++{
++    InitPhysicalSize(camera_metaData);
++    InitAntiBandingModes(camera_metaData);
++    InitAvailableModes(camera_metaData);
++    InitFpsTarget(camera_metaData);
++    InitCompensationRange(camera_metaData);
++
++    const camera_rational_t aeCompensationStep[] = {{0, 1}};
++    camera_metaData.addEntry(OHOS_CONTROL_AE_COMPENSATION_STEP, aeCompensationStep, 1);
++
++    InitAwbModes(camera_metaData);
++    InitSensitivityRange(camera_metaData);
++
++    uint8_t faceDetectMode = OHOS_CAMERA_FACE_DETECT_MODE_OFF;
++    camera_metaData.addEntry(OHOS_STATISTICS_FACE_DETECT_MODE, &faceDetectMode, 1);
++}
++} // namespace OHOS::Camera
+diff --git a/fajita/camera/vdi_impl/v4l2/pipeline_core/BUILD.gn b/fajita/camera/vdi_impl/v4l2/pipeline_core/BUILD.gn
+index eb787afd1587db7a9506cb66d786dbbe6238af14..10f14fbd8189be51f4e027284e5905bc8d842805 100644
+--- a/fajita/camera/vdi_impl/v4l2/pipeline_core/BUILD.gn
++++ b/fajita/camera/vdi_impl/v4l2/pipeline_core/BUILD.gn
+@@ -12,12 +12,20 @@
+ # limitations under the License.
+ import("//build/ohos.gni")
+ import("//device/board/${product_company}/${device_name}/device.gni")
+-import("//drivers/hdf_core/adapter/uhdf2/uhdf.gni")
+ import("//drivers/peripheral/camera/camera.gni")
+ 
++# Board pipeline nodes. sdm845 has no usable ISP/scaler/JPEG block from Linux, so this
++# reuses the software nodes of OH's USB camera VDI (ffmpeg swscale + libjpeg-turbo +
++# libexif). They register "Scale", "Codec", "Exif" and "Face", which is what
++# vendor/oneplus/fajita/hdf_config/uhdf/camera/pipeline_core/config.hcs names.
++# The common "fork", "ipp", "stability", "sink" and "v4l2_source" nodes come from
++# drivers_peripheral_camera:peripheral_camera_pipeline_core.
++usb_node_path = "//drivers/peripheral/camera/vdi_base/usb_camera/pipeline_core/src/node"
++
+ config("pipe_config") {
+   visibility = [ ":*" ]
+ 
++  defines = [ "DEVICE_USAGE_FFMPEG_ENABLE" ]
+   cflags_cc = [
+     "-Wall",
+     "-Wextra",
+@@ -26,8 +34,6 @@ config("pipe_config") {
+     "-DGST_DISABLE_DEPRECATED",
+     "-DHAVE_CONFIG_H",
+     "-DCOLORSPACE=\"videoconvert\"",
+-    "-D_VSP_LINUX_",
+-    "-D_VSP_",
+     "-fno-strict-aliasing",
+     "-Wno-sign-compare",
+     "-Wno-builtin-requires-header",
+@@ -43,101 +49,61 @@ config("pipe_config") {
+     "-fno-exceptions",
+     "-ffunction-sections",
+     "-fdata-sections",
+-    "-fno-lto",
+   ]
+ }
+ 
+ ohos_shared_library("camera_pipeline_core") {
+-  defines = []
+-  if (drivers_peripheral_camera_feature_usb) {
+-    defines += [ "CAMERA_BUILT_ON_USB" ]
+-  }
+   sources = [
+-    "$board_camera_path/pipeline_core/src/node/codec_node.cpp",
+-    "$board_camera_path/pipeline_core/src/node/exif_node.cpp",
+-    "$board_camera_path/pipeline_core/src/node/face_node.cpp",
+-    #"$board_camera_path/pipeline_core/src/node/ion/ion.c",
+-    #"$board_camera_path/pipeline_core/src/node/MemDmabuf2.cpp",
+-    #"$board_camera_path/pipeline_core/src/node/MemObject2.cpp",
+-    #"$board_camera_path/pipeline_core/src/node/avch264enc.cpp",
+-    #"$board_camera_path/pipeline_core/src/node/util.cpp",
+-    #"$board_camera_path/pipeline_core/src/node/md5.c",
+     "$camera_path/pipeline_core/src/pipeline_core.cpp",
++    "$usb_node_path/codec_node.cpp",
++    "$usb_node_path/exif_node.cpp",
++    "$usb_node_path/face_node.cpp",
++    "$usb_node_path/node_utils.cpp",
++    "$usb_node_path/scale_node.cpp",
+   ]
+   include_dirs = [
+     "../device_manager/include",
+-    "//commonlibrary/c_utils/base/include",
+-    "src/node",
+-    "$board_camera_path/device_manager/include",
+-    "$board_camera_path/driver_adapter/include",
+-    
++    usb_node_path,
+     "$camera_path/include",
+     "$camera_path/../interfaces",
+     "$camera_path/../v4l2/include",
+-    "$camera_path/device_manager/include",
+-    "//drivers/interface/camera/metadata/include",
+-    "$camera_path/../interfaces/v1_0",
+-    "//third_party/libexif",
+-    #"//third_party/libjpeg",
++    "$camera_path/dump/include",
++    "$camera_path/utils/event",
+     "$camera_path/utils/exif",
+-    #"//base/startup/init/interfaces/innerkits/include/syspara/",
+-
+-    # hcs parser
+-    #"//unisoc_p7885_property/third_kit/system/memory/libdmabufheap/include",
+-    #"//unisoc_p7885_property/third_kit/system/memory/libvideosharememory/include",
++    "$camera_path/device_manager/include",
++    "$camera_path/pipeline_core/nodes/src/source_node",
+   ]
+ 
+   deps = [
+     "$board_camera_path:config.c",
+     "$board_camera_path:params.c",
+     "$board_camera_path/device_manager:camera_device_manager",
+-    #"//device/soc/sprd/common/camera:jpeg_hw_sprd",
+-    #"//device/soc/sprd/common/hardware/omx_il/components/video/avc/dec/hw:libomx_avcenc_hw_sprd",
+-    "//third_party/libjpeg-turbo:turbojpeg_static",
+-    #"//device/soc/sprd/uis7885/hardware/aosp/system/memory/libdmabufheap:libaosp_dmabufheap",
+-    #"//device/platform/board/oriole/modules/video/memory/videosharememory:libvideo_share_memory",
+-    #"//base/startup/init/interfaces/innerkits:libbegetutil",
+   ]
+ 
+-  if (is_standard_system) {
+-    external_deps = [
+-      "drivers_peripheral_camera:peripheral_camera_buffer_manager",
+-      "drivers_peripheral_camera:peripheral_camera_device_manager",
+-      "drivers_peripheral_camera:peripheral_camera_metadata_manager",
+-      "drivers_peripheral_camera:peripheral_camera_pipeline_core",
+-      "drivers_peripheral_camera:peripheral_camera_utils",
+-      "drivers_peripheral_camera:peripheral_camera_v4l2_adapter",
+-      "hdf_core:libhdf_utils",
+-      "hilog:libhilog",
+-      #"platform_common:jpeg_hw_sprd",
+-      #"platform_common:libomx_avcenc_hw_sprd",
+-      #"platform_common:libaosp_dmabufheap",
+-      #"platform_board:libvideo_share_memory",
+-      "init:libbegetutil",
+-    ]
+-  } else {
+-    external_deps = [ "hilog:libhilog" ]
+-  }
+-  external_deps += [
++  external_deps = [
++    "bounds_checking_function:libsec_shared",
+     "c_utils:utils",
+     "drivers_interface_camera:libbuffer_producer_sequenceable_1.0",
+     "drivers_interface_camera:metadata",
++    "drivers_peripheral_camera:peripheral_camera_buffer_manager",
++    "drivers_peripheral_camera:peripheral_camera_device_manager",
++    "drivers_peripheral_camera:peripheral_camera_metadata_manager",
++    "drivers_peripheral_camera:peripheral_camera_pipeline_core",
++    "drivers_peripheral_camera:peripheral_camera_utils",
++    "drivers_peripheral_camera:peripheral_camera_v4l2_adapter",
++    "ffmpeg:libohosffmpeg",
+     "graphic_surface:surface",
+     "hdf_core:libhdf_host",
++    "hdf_core:libhdf_utils",
++    "hilog:libhilog",
++    "hisysevent:libhisysevent",
+     "ipc:ipc_single",
+-  ]
+-  cflags = [
+-    "-Wno-deprecated-pragma",
+-    "-fno-lto",
+-  ]
+-
+-  ldflags = [
+-    "-fno-lto",
++    "libexif:libexif",
++    "libjpeg-turbo:turbojpeg",
+   ]
+ 
+   public_configs = [ ":pipe_config" ]
+   install_images = [ chipset_base_dir ]
+-  install_enable = true
+   part_name = "qualcomm_products"
+ }
+ 
+@@ -154,13 +120,9 @@ config("example_config") {
+ ohos_shared_library("camera_ipp_algo_example") {
+   sources = [ "src/ipp_algo_example/ipp_algo_example.c" ]
+ 
+-  include_dirs = [
+-    "$camera_path/pipeline_core/ipp/include",
+-    "//commonlibrary/c_utils/base/include",
+-  ]
++  include_dirs = [ "$camera_path/pipeline_core/ipp/include" ]
+   external_deps = [ "c_utils:utils" ]
+   public_configs = [ ":example_config" ]
+   install_images = [ chipset_base_dir ]
+-  install_enable = true
+   part_name = "qualcomm_products"
+ }
+diff --git a/fajita/cfg/BUILD.gn b/fajita/cfg/BUILD.gn
+index 996619e8a47752d620e3654bd4c901ad8401c46c..7babffe6e628b786b382f3a3386114a9b53179d2 100755
+--- a/fajita/cfg/BUILD.gn
++++ b/fajita/cfg/BUILD.gn
+@@ -69,6 +69,13 @@ ohos_prebuilt_etc("init.insmod.sh") {
+   part_name = "qualcomm_products"
+ }
+ 
++ohos_prebuilt_etc("ueventd.config") {
++  install_enable = true
++  source = "ueventd.config"
++  install_images = [ chipset_base_dir ]
++  part_name = "qualcomm_products"
++}
++
+ ohos_prebuilt_executable("modprobe") {
+   source = "modprobe"
+   module_install_dir = "bin"
+@@ -79,6 +86,7 @@ ohos_prebuilt_executable("modprobe") {
+ 
+ group("init_configs") {
+   deps = [
++    ":ueventd.config",
+     ":fstab.fajita",
+     ":fstab.required",
+     ":init.fajita.cfg",
+diff --git a/fajita/cfg/init.fajita.cfg b/fajita/cfg/init.fajita.cfg
+index 32de1094e5c26c2493983ca931464f10d522ee3b..7dc30d774f682f38694dddf214ced276849aa548 100755
+--- a/fajita/cfg/init.fajita.cfg
++++ b/fajita/cfg/init.fajita.cfg
+@@ -56,7 +56,8 @@
+                 "chown system system /sys/class/rtc/rtc0/since_epoch",
+                 "mkdir /data/storage/ 0711 system system",
+                 "mkdir /data/storage/el1 0711 system system",
+-                "mkdir /data/storage/el2 0711 system system"
++                "mkdir /data/storage/el2 0711 system system",
++                "start camss_setup"
+             ]
+         }, {
+             "name" : "post-fs-data",
+@@ -81,6 +82,14 @@
+             "once" : 1,
+             "sandbox" : 0,
+             "start-mode" : "condition"
++        }, {
++            "name" : "camss_setup",
++            "path" : ["/vendor/bin/camss_setup", "imx376", "1", "0", "0", "0"],
++            "uid" : "root",
++            "gid" : ["root", "camera_host"],
++            "once" : 1,
++            "sandbox" : 0,
++            "start-mode" : "condition"
+         }
+     ]
+ }
+diff --git a/fajita/cfg/ueventd.config b/fajita/cfg/ueventd.config
+new file mode 100644
+index 0000000000000000000000000000000000000000..e9ab8e2e4b307eb79dc0afac0036b0820ab1fc33
+--- /dev/null
++++ b/fajita/cfg/ueventd.config
+@@ -0,0 +1,21 @@
++# Copyright (c) 2026 OnePlus 6 OpenHarmony port.
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# /vendor/etc/ueventd.config, read by ueventd after /etc/ueventd.config (which already has
++# /dev/video* 0660 camera_host camera_host).
++[device]
++# <device name> <mode> <uid> <gid> <parameter>
++# Qualcomm CAMSS media controller and subdevs: camera_host sets sensor exposure/gain on the
++# sensor subdev (soft auto exposure); camss_setup at boot runs as root.
++/dev/media* 0660 camera_host camera_host
++/dev/v4l-subdev* 0660 camera_host camera_host
+diff --git a/fajita/modules/modules.load b/fajita/modules/modules.load
+index 8392b934c779bb360f0cb33395844e8db933587d..6130bdde7df052f8bd26b7bfeebadfcd41231733 100644
+--- a/fajita/modules/modules.load
++++ b/fajita/modules/modules.load
+@@ -102,4 +102,10 @@ algif_skcipher
+ algif_hash
+ zsmalloc
+ zram
+-zstd
+\ No newline at end of file
++zstd
++v4l2_cci
++qcom_camss
++imx376
++imx371
++imx519
++lc89821x
+\ No newline at end of file
+diff --git a/fajita/modules/modules_path_194.gni b/fajita/modules/modules_path_194.gni
+index 757f5077bada479f459bd03731ee94be965fb633..427765525b44c786f402133eca512c654e53a935 100644
+--- a/fajita/modules/modules_path_194.gni
++++ b/fajita/modules/modules_path_194.gni
+@@ -355,6 +355,11 @@ modules_files = [
+   "5.10.194-sdm845/kernel/drivers/media/platform/qcom/venus/venus-dec.ko",
+   "5.10.194-sdm845/kernel/drivers/media/platform/qcom/venus/venus-core.ko",
+   "5.10.194-sdm845/kernel/drivers/media/platform/qcom/camss/qcom-camss.ko",
++  "5.10.194-sdm845/kernel/drivers/media/v4l2-core/v4l2-cci.ko",
++  "5.10.194-sdm845/kernel/drivers/media/i2c/imx376.ko",
++  "5.10.194-sdm845/kernel/drivers/media/i2c/imx371.ko",
++  "5.10.194-sdm845/kernel/drivers/media/i2c/imx519.ko",
++  "5.10.194-sdm845/kernel/drivers/media/i2c/lc89821x.ko",
+   "5.10.194-sdm845/kernel/drivers/media/i2c/ir-kbd-i2c.ko",
+   "5.10.194-sdm845/kernel/drivers/media/cec/core/cec.ko",
+   "5.10.194-sdm845/kernel/drivers/media/common/videobuf2/videobuf2-common.ko",
