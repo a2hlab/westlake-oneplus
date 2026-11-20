@@ -54,7 +54,7 @@ still failed the next call.
 |---|---|---|
 | `01-phone-runtime.sh` | once per OH build | pulls the OH libraries Westlake links against, writes the firmware list with this phone's hashes, builds the GPU stand-in, makes `native-runtime-op6` |
 | `02-bridge.sh` | once per Westlake change | builds `liboh_adapter_bridge.so` (for `WL_OH`) and the spawner `appspawn-x` into `override-op6` |
-| `03-prep.sh` | after every boot | `sha256sum`/`chcon` on the phone, the kernel wake lock `no_suspend` if the image did not take it (suspend drops USB here), installs the host HAP |
+| `03-prep.sh` | after every boot | `sha256sum`/`chcon` on the phone, the kernel wake lock `no_suspend` if the image did not take it (suspend drops USB here), no automatic restart of the audio and compute DSPs, installs the host HAP |
 | `04-framework.sh` | after every boot | stages the framework and checks that it initialises (~3 min) |
 | `05-launch.sh APP` | per app (6.1) | launches the app over the host's window; prints the window lines and saves a screenshot |
 | `06-managed.sh APP` | per app (7.0) | makes, signs and installs the app's own OH bundle, launches it through OH; saves a screenshot |
@@ -165,4 +165,27 @@ flag set. `SECURE_LAYER=1` keeps the security layers.
 Rounds also give apps the locale `en-US` (`LOCALE`; `WESTLAKE_LOCALE` in the app's environment), as on Westlake's
 test board, whose language is English: this image's default language is Chinese, and an app that sees `zh_CN` may
 take another path (a region check, another first screen). `LOCALE=` keeps the phone's own.
+
+### Unattended rounds
+
+The phone can hang under load (it waits in Qualcomm crash-dump mode until it is restarted), so long rounds run
+under `tools/supervise-round.sh TAG [FIRST [LAST]]` (start it with `setsid nohup bash ...`). Every shell call of
+`07-round.sh` on the phone has a time limit (`DEV_TIMEOUT`, 300 s), so a hang stops the round (exit 4) instead of
+leaving it waiting; the supervisor then has the phone captured and restarted by `scripts/recover-phone.sh` (the
+kernel's own log, tasks and stacks, TrustZone's diagnostics: `scripts/crashdump.py`), waits for a phone that
+rebooted by itself, runs `03` and `04` again and resumes the round. An app the phone went away during twice gets the
+result `phone-hung` and is skipped. Settings: `recover-phone.sh`'s (its header), and `WL_ENV`, a file of settings
+sourced first (e.g. those of the 7.0 setup). The phone should start OH by itself after a reset (branch `oh-7.0`:
+`13-flash-boot.sh`, and `14-data-partition.sh` so that `/data` and the Wi-Fi login stay); otherwise
+`recover-phone.sh` RAM-boots it, but only with `SERIAL` set.
+
+Beside it, `tools/kmsg-watch.sh TAG` keeps the phone's kernel log on the host every 5 s (the last lines before a hang
+are there even when no RAM capture can be made) and reboots the phone when the audio or compute DSP crashed
+(`03` turns their automatic restart off: this kernel's restart is not safe). `tools/finish-round.sh TAG [BASE]`
+waits for the first pass, launches again the apps that did not launch (not the `phone-hung` ones), and reports;
+`tools/round-report.sh TAG [BASE]` gives the numbers of a round so far (scores, rungs, the apps whose rung differs
+from `BASE`, a `round_score.py --json` output or a D600 round's scores).
+
+`tools/hdc-retry.sh` can log the time of every hdc call (start, end, exit code, arguments) while the file
+`HDC_TIMING_FLAG` exists (`HDC_TIMING_LOG`; both default to `$XDG_RUNTIME_DIR`), to profile a round.
 
