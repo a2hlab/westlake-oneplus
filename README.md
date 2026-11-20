@@ -168,6 +168,8 @@ scripts/06-make-boot.sh     # boot image (kernel + DTB + OH ramdisk)
 
 Settings are in [`scripts/config.sh`](scripts/config.sh): `WORK_DIR` (default `~/oh61-oneplus6`), `JOBS`,
 tool paths, phone serial. Put your own values in `scripts/local.sh` (git-ignored).
+With the build on another machine, `BUILD_HOST=<ssh host> scripts/fetch-images.sh DIR` copies its images (checked
+against its sha256) and makes a boot image from them with the kernel of an existing boot image.
 `scripts/verify-pins.sh` checks that all 505 projects of the tree are at the commits listed in
 [`manifests/oh61-full-pinned.xml`](manifests/oh61-full-pinned.xml).
 
