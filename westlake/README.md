@@ -188,4 +188,6 @@ from `BASE`, a `round_score.py --json` output or a D600 round's scores).
 
 `tools/hdc-retry.sh` can log the time of every hdc call (start, end, exit code, arguments) while the file
 `HDC_TIMING_FLAG` exists (`HDC_TIMING_LOG`; both default to `$XDG_RUNTIME_DIR`), to profile a round.
+`tools/hdc-profile.py TIMING_LOG round-TAG.log` then says where each app's turn went: its hdc calls by kind (shell,
+file send, file recv), the time between them (host-side work and waits), and the longest calls and gaps.
 
