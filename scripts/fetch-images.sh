@@ -7,7 +7,9 @@
 #   BUILD_HOST        the build machine as ssh knows it (e.g. a Host entry of BUILD_SSH_CONFIG)
 #   BUILD_SSH_CONFIG  an ssh config file (optional)
 #   BUILD_IMAGES_DIR  the images directory there (default: $IMAGES_DIR, i.e. the same layout as here)
-#   KERNEL_BOOT_IMG   the boot image whose kernel and DTB are kept (default $BOOT_IMG)
+#   KERNEL_BOOT_IMG   the boot image whose kernel and DTB are kept (default $BOOT_IMG). One made before kernel 0011
+#                     (2026-11-19) has the memory map that hangs the phone: give it the new DTB first
+#                     (TEST_BOOT_IMG=<it> DTB_ONLY=1 scripts/test-kernel.sh OUT_DIR, on a tree with 0011 applied).
 set -euo pipefail
 . "$(dirname "$0")/config.sh"
 D=${1:?usage: $0 DIR}
