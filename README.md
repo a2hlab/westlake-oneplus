@@ -219,6 +219,10 @@ scripts/14-data-partition.sh --erase-android-data   # userdata -> Android (ANDRO
 - Then the Wi-Fi login, the installed apps and everything else on `/data` survive reboots. The first boot on the
   new partition is a first boot as usual; `mount-data.sh` checks the file system (`e2fsck`) at every boot, since a
   hang ends in a hard reset.
+- A second phone: every phone on these images has the same hdc serial (the board's USB config writes a fixed one),
+  so hdc cannot tell two of them apart. [docs/second-phone.md](docs/second-phone.md): giving a phone its own serial,
+  installing OH on it with every script setting naming it, `/data` on its whole storage (`ANDROID_GB=1`), and its
+  enterprise Wi-Fi login with uitest.
 
 ## What the patches change
 
