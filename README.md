@@ -71,6 +71,8 @@ Known limitations:
   On WSL with the Windows tools, point `ADB`, `FASTBOOT` and `HDC` at the `.exe` files: the scripts hand them
   `\\wsl.localhost\...` paths, so images stay on the Linux disk. Windows also needs a driver for the phone's
   fastboot mode: [`scripts/windows/install-fastboot-driver.ps1`](scripts/windows/install-fastboot-driver.ps1).
+  Long-lived WSL sessions can lose the interop socket a call needs; for unattended runs,
+  [`scripts/winexe-retry.sh`](scripts/winexe-retry.sh) repeats such calls (see its header for an `adb.exe` wrapper).
 
 ## Install without building
 
@@ -155,7 +157,10 @@ bring-up record: every failure, how it showed and what fixed it.
 - A phone that hangs or panics under OH waits in Qualcomm crash-dump mode (USB `05c6:900e`, `QUSB_BULK` on Windows)
   until it is restarted, with its RAM intact: `scripts/crashdump.py console DIR` reads the kernel's console log from
   the ramoops area there, and `scripts/crashdump.py reset` restarts the phone without touching it (under WSL, give
-  the device to Linux with usbipd-win first; see the script).
+  the device to Linux with usbipd-win first; see the script). `scripts/crashdump.py kmsg DIR --system-map MAP`
+  reads the kernel's own log (every message, whatever the loglevel), all tasks with the stacks of running and
+  blocked ones, and TrustZone's diagnostics (bus errors, watchdog bites) from RAM. `scripts/recover-phone.sh` does
+  all of it, restarts the phone and waits until OH is up again (settings in its header).
 - `hdc shell reboot bootloader` takes a running OH back to fastboot.
 
 ## Layout
@@ -166,7 +171,7 @@ manifests/oh61-full-pinned.xml  every project of the tested tree with its commit
 patches/oh/<project path>/      patches for OpenHarmony projects
 patches/kernel/                 kernel patches + config fragment
 scripts/                        host setup, sync, build, install, boot (00..12), helpers
-westlake/                       Android apps with Westlake on this build (01..05, tap.sh)
+westlake/                       Android apps with Westlake on this build (01..07, tap.sh, tools/: rounds)
 docs/bringup-notes.md           how it was brought up, failure by failure
 ```
 
