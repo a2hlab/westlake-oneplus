@@ -36,9 +36,7 @@ OH_CLANG_BIN=$OH_ROOT/prebuilts/clang/ohos/linux-x86_64/llvm/bin
 # magic, from apps' security SDKs probing their file descriptors) froze the phone into crash-dump mode within
 # seconds, twice in a corpus round (TikTok, CapCut); at 1 the same apps ran. Boot debugging: BOOT_CMDLINE_EXTRA=ignore_loglevel.
 # lsm=...,selinux,...: the kernel has SELinux built in, but its default LSM list (CONFIG_LSM) leaves it out.
-# log_buf_len=4M: the kernel's own log (every message, whatever the console loglevel) is what a crash-dump capture
-# reads after a hang; the default 512 KB held about 10 minutes of a corpus round.
-BOOT_CMDLINE_BASE="console=tty0 fbcon=font:TER16x32 loglevel=1 log_buf_len=4M hardware=fajita default_boot_device=soc@0/1d84000.ufshc ohos.boot.eng_mode=on lsm=lockdown,yama,loadpin,safesetid,integrity,selinux,bpf"
+BOOT_CMDLINE_BASE="console=tty0 fbcon=font:TER16x32 loglevel=1 hardware=fajita default_boot_device=soc@0/1d84000.ufshc ohos.boot.eng_mode=on lsm=lockdown,yama,loadpin,safesetid,integrity,selinux,bpf"
 : "${BOOT_CMDLINE_EXTRA:=}"   # e.g. op6.logdump=1, or "ignore_loglevel" to see every boot message on screen
 
 # --- phone ---

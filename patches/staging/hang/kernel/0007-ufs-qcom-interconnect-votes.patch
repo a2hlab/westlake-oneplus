@@ -4,7 +4,10 @@ properties). 5.10 votes nothing for UFS, so its traffic and register accesses de
 upstream's comment: "Without proper bandwidth vote, register access might fail." On this phone several hangs into
 crash-dump mode came with heavy UFS I/O (dd of a partition, unpacking a large app) and ended with TrustZone
 handling NoC (bus) errors. Values: the v6.x table's for HS-G3 on two lanes, voted while the controller's clocks
-are on (before the first register access at init), and dropped when they go off. Not yet tested on the phone.
+are on (before the first register access at init), and dropped when they go off. Tested on the phone
+(2026-11-19, a RAM-booted kernel with the release config and 0005-0007): the votes are there
+(interconnect_summary: 1d84000.ufshc), but the storage stress (../io-stress.sh) hung the phone within seconds
+anyway, without the NoC errors of the release kernel's hangs: it changes how the hang shows, not whether.
 
 diff --git a/arch/arm64/boot/dts/qcom/sdm845.dtsi b/arch/arm64/boot/dts/qcom/sdm845.dtsi
 index 75a01f9d2..ca77b0ad9 100644
