@@ -47,7 +47,7 @@ Checked on the phone with 7.0 + SceneBoard:
 | GNSS | yes, to the modem: with Location on, OH's GNSS host loads the vendor adapter (`device/soc/qualcomm/0004`, a QMI LOC client over QRTR); the modem's GNSS engine runs and reports NMEA every second, and Wi-Fi stays up meanwhile. A fix needs sky view (checked indoors only: no satellites in view) |
 | SELinux | on, permissive, with OH's policy loaded (`build_selinux`, vendor `0004`; `lsm=...,selinux,...` on the boot command line: the kernel's default LSM list leaves SELinux out). The image files carry their labels (vendor `0005`: the port's image configs named an older OH's file-contexts path, and the image tool drops a missing one without a word, so every file was `unlabeled`). Five sdm845 services named domains the policy does not have, so init could not start them, and without pd-mapper and rmtfs there was no modem, Wi-Fi or audio DSP (`device/soc/qualcomm/0005`). Permissive is the port's choice; the D600's Westlake rounds run with `setenforce 0` as well |
 | suspend | the kernel is kept out of it by the board's wake lock (held after boot, no suspends) |
-| memory pressure (sustained storage writes, large apps) | yes since kernel `0011`: the port's device tree gave the kernel 26 MB of firmware-protected memory (0x89100000-0x8aafffff; one read there froze the SoC), so the phone hung into crash-dump mode whenever memory pressure reached those pages (a storage or memory stress within a minute; long corpus rounds every few hours). `0011` reserves memory as mainline does; a 10-minute memory stress and a 15-minute storage stress ([`io-stress.sh`](patches/staging/hang/io-stress.sh)) then pass |
+| memory pressure (sustained storage writes, large apps) | yes since kernel `0011`: the port's device tree gave the kernel 26 MB of firmware-protected memory (0x89100000-0x8aafffff; one read there froze the SoC), so the phone hung into crash-dump mode whenever memory pressure reached those pages (a storage or memory stress within a minute; long corpus rounds every few hours). `0011` reserves memory as mainline does; a 10-minute memory stress ([`mem-stress.sh`](patches/staging/hang/mem-stress.sh)) and a 15-minute storage stress ([`io-stress.sh`](patches/staging/hang/io-stress.sh)) then pass. How it was found: [docs/hang-2026-11-19.md](docs/hang-2026-11-19.md) |
 | camera | no: this kernel has no camera subsystem driver (no `/dev/media*`; `/dev/video0`, `1` are the video codec). Staged, not yet run on the phone: [`patches/staging/camera`](patches/staging/camera) adds the SDM845 camera subsystem, the three sensors (IMX519 rear main, IMX376K rear secondary, IMX371 front) and their device tree as modules, and OH's camera HDI for the IMX376K; [docs/camera.md](docs/camera.md) has the RAM-boot test |
 | modem (calls, mobile data), sensors | not checked yet |
 
@@ -169,7 +169,8 @@ scripts/06-make-boot.sh     # boot image (kernel + DTB + OH ramdisk)
 Settings are in [`scripts/config.sh`](scripts/config.sh): `WORK_DIR` (default `~/oh61-oneplus6`), `JOBS`,
 tool paths, phone serial. Put your own values in `scripts/local.sh` (git-ignored).
 With the build on another machine, `BUILD_HOST=<ssh host> scripts/fetch-images.sh DIR` copies its images (checked
-against its sha256) and makes a boot image from them with the kernel of an existing boot image.
+against its sha256) and makes a boot image from them with the kernel and DTB of an existing boot image (one made
+before kernel `0011` lacks its memory map: `scripts/test-kernel.sh` with `DTB_ONLY=1` puts it in).
 `scripts/verify-pins.sh` checks that all 505 projects of the tree are at the commits listed in
 [`manifests/oh61-full-pinned.xml`](manifests/oh61-full-pinned.xml).
 
@@ -250,7 +251,12 @@ bring-up record: every failure, how it showed and what fixed it.
 - A phone that hangs or panics waits in Qualcomm crash-dump mode (USB `05c6:900e`) with its RAM intact; the main
   branch's `scripts/crashdump.py` reads the kernel's own log, all tasks with their stacks and TrustZone's
   diagnostics from there and restarts the phone, and its `scripts/recover-phone.sh` does all of that and waits
-  until OH is up again.
+  until OH is up again (how to read a capture: the main branch's `docs/crash-dump.md`).
+- Kernel and device-tree changes can be tried without new images or modules: `scripts/test-kernel.sh OUT_DIR
+  [PATCH...]` builds the kernel (or with `DTB_ONLY=1` only the DTB) with the phone kernel's configuration into a boot
+  image with the installed ramdisk, to RAM-boot. [docs/hang-2026-11-19.md](docs/hang-2026-11-19.md) shows how the
+  phone's hangs were traced to the memory map with it, two stress scripts and a probe module that tests whether a
+  physical page can be read ([`patches/staging/hang`](patches/staging/hang)).
 - `BOOT_CMDLINE_EXTRA=op6.logdump=1 scripts/06-make-boot.sh` makes OH write its kernel log, process list and
   crash dumps every 4 s to the unused end of `system_b`. After a hang, force-restart (Power ~10 s; the phone
   falls back to Android) and run `scripts/read-logdump.sh`. ramoops does not survive a reboot on this phone.
@@ -266,6 +272,7 @@ patches/kernel/                 kernel patches + config fragment
 patches/staging/<topic>/        patches not yet proven on the phone: applied only with STAGING=<topic>
 scripts/                        host setup, sync, build, install, boot (00..15), helpers
 docs/bringup-notes.md           how it was brought up, failure by failure
+docs/hang-2026-11-19.md         the hangs under memory pressure: how the cause (the memory map) was found
 ```
 
 ## Credits and licenses
