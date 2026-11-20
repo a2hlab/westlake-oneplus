@@ -21,3 +21,5 @@ directory with the release kernel's `.config` unchanged (`make ... olddefconfig 
 qcom/sdm845-oneplus-enchilada.dtb`), so the modules on the phone still fit; make a boot image with that kernel and the
 installed ramdisk and RAM-boot it (`BOOT_IMG=... scripts/11-boot-oh.sh`). Nothing is flashed; a reset returns to the
 installed kernel. That is how `0005`-`0007` ran.
+
+Root cause found on 2026-11-19 evening: not the UFS host but the device tree's memory map. The kernel was given 26 MB of firmware-protected memory (0x89100000-0x8aafffff); patches/kernel/0011 (default build) reserves it as mainline does, and the storage and memory stresses then pass. 0005 (quiet access-token probes) and 0006 (fastrpc session 0) remain optional improvements; 0007 is not needed.
