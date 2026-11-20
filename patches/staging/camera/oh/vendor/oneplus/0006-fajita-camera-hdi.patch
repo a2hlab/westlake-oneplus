@@ -1,0 +1,2292 @@
+Camera HDI configuration for the OnePlus 6 (rear IMX376K, see device/board/oneplus 0007).
+- camera_host_config.hcs: one back camera lcam001 -> CAMERA_FIRST: orientation 90 (the device tree's
+  270 counter-clockwise), MMAP buffers, auto exposure and white balance on, preview RGBA_8888/NV21 1280x960
+  and 640x480, photo JPEG 1280x960 (the sensor's 2x2-binned 2592x1940, halved again and fitted to 4:3).
+- pipeline_core/config.hcs: the pipelines name the nodes this board registers (the software nodes of the
+  USB-camera VDI) instead of rk3568's RKCodec/RKScale/RKExif/RKFace.
+- camss_raw.cfg (new, /vendor/etc/camera/camss_raw.cfg): which CAMSS video node, RDI subdev and sensor belong
+  to the hardware name imx376; the raw format is read from the RDI pad (format=auto).
+- etc/camera/CameraProfiles.json (new): the system Camera app's profiles, limited to what the HDI offers;
+  without it the app falls back to a generic 4096x3072 table.
+
+diff --git a/fajita/etc/BUILD.gn b/fajita/etc/BUILD.gn
+index 534e04db3e7b24ca7b5bd578b0910e403b34c5c1..6281a752bd1f7b49978fffef4c4f0b31d930fe87 100644
+--- a/fajita/etc/BUILD.gn
++++ b/fajita/etc/BUILD.gn
+@@ -39,8 +39,19 @@ ohos_prebuilt_etc("gesture_navigation_setting") {
+   part_name = "product_fajita"
+ }
+ 
++# System Camera app (com.ohos.camera) profiles: the app reads etc/camera/CameraProfiles.json through
++# configPolicy (/chipset -> /vendor) before its built-in per-chip defaults; sizes/formats here must be
++# offered by camera_host_config.hcs basicAvailableConfigurations.
++ohos_prebuilt_etc("camera_profiles") {
++  source = "./camera/CameraProfiles.json"
++  install_images = [ vendor_base_dir ]
++  relative_install_dir = "camera"
++  part_name = "product_fajita"
++}
++
+ group("product_etc_conf") {
+   deps = [
++    ":camera_profiles",
+     ":para_for_chip_prod",
+     ":para_for_sys_prod",
+     ":gesture_navigation_setting",
+diff --git a/fajita/etc/camera/CameraProfiles.json b/fajita/etc/camera/CameraProfiles.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..60c13aee179224ec1eec58976c345f18376766a6
+--- /dev/null
++++ b/fajita/etc/camera/CameraProfiles.json
+@@ -0,0 +1,553 @@
++{
++  "version": "v2",
++  "cameraCapability": [
++    {
++      "cameraType": 1,
++      "cameraTypeData": [
++        {
++          "collapsState": 2,
++          "collapsStateData": [
++            {
++              "modeName": "VIDEO SNAPSHOT",
++              "modeData": {
++                "photoProfiles": [
++                  {
++                    "ratio": "4K",
++                    "profileWidth": 1280,
++                    "profileHeight": 960,
++                    "format": [
++                      "JPEG"
++                    ]
++                  },
++                  {
++                    "ratio": "full",
++                    "profileWidth": 1280,
++                    "profileHeight": 960,
++                    "format": [
++                      "JPEG"
++                    ]
++                  },
++                  {
++                    "ratio": "16:9 1080p",
++                    "profileWidth": 1280,
++                    "profileHeight": 960,
++                    "format": [
++                      "JPEG"
++                    ]
++                  },
++                  {
++                    "ratio": "16:9 720p",
++                    "profileWidth": 1280,
++                    "profileHeight": 960,
++                    "format": [
++                      "JPEG"
++                    ]
++                  }
++                ]
++              }
++            }
++          ],
++          "defaultData": {
++            "photoProfiles": [
++              {
++                "ratio": "4:3",
++                "profileWidth": 1280,
++                "profileHeight": 960,
++                "format": [
++                  "JPEG"
++                ]
++              },
++              {
++                "ratio": "1:1",
++                "profileWidth": 1280,
++                "profileHeight": 960,
++                "format": [
++                  "JPEG"
++                ]
++              },
++              {
++                "ratio": "full",
++                "profileWidth": 1280,
++                "profileHeight": 960,
++                "format": [
++                  "JPEG"
++                ]
++              }
++            ],
++            "photoPreviewProfiles": [
++              {
++                "ratio": "4:3",
++                "profileWidth": 1280,
++                "profileHeight": 960,
++                "format": [
++                  "RGBA_8888"
++                ]
++              },
++              {
++                "ratio": "1:1",
++                "profileWidth": 1280,
++                "profileHeight": 960,
++                "format": [
++                  "RGBA_8888"
++                ]
++              },
++              {
++                "ratio": "full",
++                "profileWidth": 1280,
++                "profileHeight": 960,
++                "format": [
++                  "RGBA_8888"
++                ]
++              }
++            ],
++            "videoProfiles": [
++              {
++                "ratio": "4K",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ],
++                "frameRateArray": [
++                  5,
++                  10
++                ]
++              },
++              {
++                "ratio": "full",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ],
++                "frameRateArray": [
++                  5,
++                  10
++                ]
++              },
++              {
++                "ratio": "16:9 1080p",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ],
++                "frameRateArray": [
++                  5,
++                  10
++                ]
++              },
++              {
++                "ratio": "16:9 720p",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ],
++                "frameRateArray": [
++                  5,
++                  10
++                ]
++              }
++            ],
++            "videoPreviewProfiles": [
++              {
++                "ratio": "4K",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ]
++              },
++              {
++                "ratio": "full",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ]
++              },
++              {
++                "ratio": "16:9 1080p",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ]
++              },
++              {
++                "ratio": "16:9",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ]
++              }
++            ]
++          }
++        }
++      ]
++    },
++    {
++      "cameraType": 2,
++      "cameraTypeData": [
++        {
++          "collapsState": 2,
++          "collapsStateData": [
++            {
++              "modeName": "VIDEO SNAPSHOT",
++              "modeData": {
++                "photoProfiles": [
++                  {
++                    "ratio": "4K",
++                    "profileWidth": 1280,
++                    "profileHeight": 960,
++                    "format": [
++                      "JPEG"
++                    ]
++                  },
++                  {
++                    "ratio": "full",
++                    "profileWidth": 1280,
++                    "profileHeight": 960,
++                    "format": [
++                      "JPEG"
++                    ]
++                  },
++                  {
++                    "ratio": "16:9 1080p",
++                    "profileWidth": 1280,
++                    "profileHeight": 960,
++                    "format": [
++                      "JPEG"
++                    ]
++                  },
++                  {
++                    "ratio": "16:9 720p",
++                    "profileWidth": 1280,
++                    "profileHeight": 960,
++                    "format": [
++                      "JPEG"
++                    ]
++                  }
++                ]
++              }
++            }
++          ],
++          "defaultData": {
++            "photoProfiles": [
++              {
++                "ratio": "4:3",
++                "profileWidth": 1280,
++                "profileHeight": 960,
++                "format": [
++                  "JPEG"
++                ]
++              },
++              {
++                "ratio": "1:1",
++                "profileWidth": 1280,
++                "profileHeight": 960,
++                "format": [
++                  "JPEG"
++                ]
++              },
++              {
++                "ratio": "full",
++                "profileWidth": 1280,
++                "profileHeight": 960,
++                "format": [
++                  "JPEG"
++                ]
++              }
++            ],
++            "photoPreviewProfiles": [
++              {
++                "ratio": "4:3",
++                "profileWidth": 1280,
++                "profileHeight": 960,
++                "format": [
++                  "RGBA_8888"
++                ]
++              },
++              {
++                "ratio": "1:1",
++                "profileWidth": 1280,
++                "profileHeight": 960,
++                "format": [
++                  "RGBA_8888"
++                ]
++              },
++              {
++                "ratio": "full",
++                "profileWidth": 1280,
++                "profileHeight": 960,
++                "format": [
++                  "RGBA_8888"
++                ]
++              }
++            ],
++            "videoProfiles": [
++              {
++                "ratio": "4K",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ],
++                "frameRateArray": [
++                  5,
++                  10
++                ]
++              },
++              {
++                "ratio": "full",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ],
++                "frameRateArray": [
++                  5,
++                  10
++                ]
++              },
++              {
++                "ratio": "16:9 1080p",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ],
++                "frameRateArray": [
++                  5,
++                  10
++                ]
++              },
++              {
++                "ratio": "16:9 720p",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ],
++                "frameRateArray": [
++                  5,
++                  10
++                ]
++              }
++            ],
++            "videoPreviewProfiles": [
++              {
++                "ratio": "4K",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ]
++              },
++              {
++                "ratio": "full",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ]
++              },
++              {
++                "ratio": "16:9 1080p",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ]
++              },
++              {
++                "ratio": "16:9",
++                "profileWidth": 640,
++                "profileHeight": 480,
++                "format": [
++                  "RGBA_8888"
++                ]
++              }
++            ]
++          }
++        }
++      ]
++    }
++  ],
++  "zoomParameter": [
++    {
++      "cameraType": 1,
++      "cameraTypeData": [],
++      "defaultData": [
++        {
++          "modeName": "PHOTO",
++          "quickZoomArray": [
++            0.49,
++            1,
++            3.5,
++            10
++          ],
++          "opticalZoomArray": [
++            0.49,
++            1,
++            3.5,
++            10,
++            100
++          ]
++        },
++        {
++          "modeName": "VIDEO",
++          "quickZoomArray": [
++            0.49,
++            1,
++            4,
++            10
++          ],
++          "opticalZoomArray": [
++            0.49,
++            1,
++            4,
++            10,
++            20
++          ]
++        }
++      ]
++    },
++    {
++      "cameraType": 2,
++      "cameraTypeData": [],
++      "defaultData": [
++        {
++          "modeName": "PHOTO",
++          "quickZoomArray": [
++            0.67,
++            0.8,
++            1
++          ],
++          "opticalZoomArray": [
++            0.67,
++            0.8,
++            1
++          ]
++        },
++        {
++          "modeName": "VIDEO",
++          "quickZoomArray": [
++            0.67,
++            0.8,
++            1
++          ],
++          "opticalZoomArray": [
++            0.67,
++            0.8,
++            1
++          ]
++        }
++      ]
++    }
++  ],
++  "supportedMode": {
++    "modeBarList": [
++      "PHOTO",
++      "VIDEO"
++    ],
++    "moreModeList": [],
++    "filteredModeList": []
++  },
++  "startupGuidancePages": [],
++  "metadata": {
++    "photoBrowserDisabled": true,
++    "isSupportedSuperMacroTelephoto": false,
++    "isSupportHDRVividFunction": false,
++    "isSupportedXmageFunction": false,
++    "isSupportedFrontZoomSlide": false,
++    "isSupportedHighQualityPhotoFunction": false,
++    "highQualityPhotoFuncDefaultValue": false,
++    "isSupportedLivePhotoFunction": false,
++    "livePhotoFuncDefaultValue": false,
++    "isSupportedWatermarkFunction": false,
++    "isSupportedVideoWaterMark": false,
++    "limitTimeWatermarkDuration": "",
++    "isSupportedLiveFilterFunction": false,
++    "isSupportedRealTimeFilterFunction": false,
++    "isDisAbleSlowMotionSwitch": false,
++    "isSupportedLrSwipeFunction": false,
++    "isSupportedRightSwipeRecordSwapSurface": false,
++    "burstMaxNum": 80,
++    "superSlowMoFrameRate": 960,
++    "isSupportedAugmentedStabilizationFunction": false,
++    "isSupportedTimingWaterMark": false,
++    "isSupportedOverHotHidePip": false,
++    "isSupportedHeifPhotoFormat": false,
++    "isHeifFormatFuncDefaultValue": false,
++    "isSupportedStabilizationWithHDRVivid": false,
++    "isSupportedEnhancedBackSelfie": false,
++    "isSupportedHeifStraightOut": false,
++    "isSupportedSmartBackSelfieFunction": false,
++    "frontSwingZoomRatio": 0.96,
++    "backSwingZoomRatio": 0.55,
++    "backVideoEisStabilizeRatio": 0.82,
++    "frontVideoEisStabilizeRatio": 0.8,
++    "isSupportedCollaborationFunction": false,
++    "isSupportedDepthFusion": false,
++    "supportedXmageStylesNum": 3,
++    "is60fpsDefaultCloseEfficientVideo": false,
++    "isShortExposureDuration": false,
++    "isCloseThermalDialog": false,
++    "isSupportedNightFrontZoom": false,
++    "isSupportedApertureVideoResolutionChanged": false,
++    "isSupportedBeautyThemeFunction": false,
++    "is60fpsSupportHdrVivid": false,
++    "isNotSupportedWideZoom60fpsVideoBack": false,
++    "superMacroLivePhotoFuncDefaultValue": false,
++    "isSupportedCustomColorStyle": false,
++    "isSupportedDynamicFramerate": false,
++    "isSupportedNightSubMode": false,
++    "isDeviceLowConfig": false,
++    "isSupportedConstellationDraw": false,
++    "isSupportGlobalExposure": false,
++    "ringLightConfigBrightness": 1,
++    "isNeedRemoveFlashFunc": false,
++    "isNeedRemoveAiMaster": false,
++    "isSupportedFestivalWatermark": false,
++    "videoBitrateH264": 30000000,
++    "videoBitrateH265": 30000000,
++    "isSupportedEffectWhenNotEnableCapture": false,
++    "isDisAbleTabletNightSwitch": false,
++    "isSupportedHighColorSpace": false,
++    "isSupportedScanCode": false,
++    "isSupportedAIComposition": false,
++    "isSupportedLogStyle": false,
++    "isNotSupportedWatchMoonPictureInPicture": false,
++    "isSupportPortraitBeautyPro": false,
++    "isNotSupportVideoBeautyPro": false,
++    "isSupportEnableStableQuality": false,
++    "beautyProDefaultValue": [
++      5,
++      5,
++      0,
++      5,
++      5,
++      5,
++      5,
++      5,
++      0
++    ],
++    "isSupportsAntiShakeSnapshot": false,
++    "smartPosition": 230,
++    "isDisAbleRealTimeLapsePro": false,
++    "isObtainStabilizationSupportFromCameraProfiles": false,
++    "isSupportedStabilization": false,
++    "isSupportMergedCustomColorStyle": false,
++    "isPanoramaSupportHeif": false,
++    "isDisableFrontVideoMirror": false,
++    "isSupportedIntervalPhotoCapture": false
++  },
++  "customColorStyleSupportedMode": [
++    "PHOTO",
++    "PORTRAIT",
++    "STAGE"
++  ]
++}
+diff --git a/fajita/hdf_config/uhdf/camera/camss_raw.cfg b/fajita/hdf_config/uhdf/camera/camss_raw.cfg
+new file mode 100644
+index 0000000000000000000000000000000000000000..dfd4c782fe37179ff45963b0c40930e1fb4873dd
+--- /dev/null
++++ b/fajita/hdf_config/uhdf/camera/camss_raw.cfg
+@@ -0,0 +1,22 @@
++# Raw Bayer cameras behind Qualcomm CAMSS (no ISP), read by the V4L2 adapter of camera_host
++# (drivers/peripheral/camera .../driver_adapter/include/camss_raw.h). Installed as
++# /vendor/etc/camera/camss_raw.cfg. One line per camera; see camss_raw.h for all keys.
++#
++# hw     = DM_C_SENSOR name in device/board/oneplus/fajita/camera/vdi_impl/v4l2/device_manager/include/project_hardware.h
++# video  = name of the CAMSS capture node (cat /sys/class/video4linux/video*/name): msm_vfeN_videoM is
++#          the node of subdev msm_vfeN_rdiM (M = 0..2, 3 = pix)
++# rdi    = the VFE line subdev feeding that node; with format=auto its pad-0 format (set by
++#          /vendor/bin/camss_setup at boot from the sensor's current code) gives the raw format and size,
++#          so the Bayer order follows the sensor's flip controls (IMX376 default: SBGGR10_1X10)
++# sensor = prefix of the sensor subdev name ("imx376 <bus>-0010"); camera_host sets
++#          V4L2_CID_EXPOSURE / V4L2_CID_ANALOGUE_GAIN on it for auto exposure
++# Without access to the rdi subdev, give the format explicitly instead of format=auto, e.g.
++#          width=2592 height=1940 format=SBGGR10P
++#
++# Rear Sony IMX376K: CSIPHY1 -> CSID0 (source pad 1) -> VFE0 RDI0 -> msm_vfe0_video0, 2592x1940 RAW10.
++hw=imx376 video=msm_vfe0_video0 rdi=msm_vfe0_rdi0 sensor=imx376 format=auto black=64 gain=sony:512
++# Later, once routed by a camss_setup service in init.fajita.cfg and added to project_hardware.h +
++# camera_host_config.hcs:
++# front IMX371 (CSIPHY2, 4656x3496, defaults SBGGR10), rear IMX519 (CSIPHY0, C-PHY, flips 0)
++#hw=imx371 video=msm_vfe1_video0 rdi=msm_vfe1_rdi0 sensor=imx371 format=auto black=64 gain=sony:512
++#hw=imx519 video=msm_vfe2_video0 rdi=msm_vfe2_rdi0 sensor=imx519 format=auto black=64 gain=sony:1024
+diff --git a/fajita/hdf_config/uhdf/camera/hdi_impl/camera_host_config.hcs b/fajita/hdf_config/uhdf/camera/hdi_impl/camera_host_config.hcs
+index 56a701ea1c6cc53622401b8ea461cab2cd3bf8f5..76550748cb82157451e4e2bb9c0f6d4ea5eab9f5 100644
+--- a/fajita/hdf_config/uhdf/camera/hdi_impl/camera_host_config.hcs
++++ b/fajita/hdf_config/uhdf/camera/hdi_impl/camera_host_config.hcs
+@@ -125,29 +125,41 @@ root {
+                 ];
+             }
+         }
++        /*
++         * OnePlus 6 rear camera: Sony IMX376K on CSIPHY1, raw Bayer through Qualcomm CAMSS (no ISP),
++         * converted to YUV in software by the V4L2 adapter (camss_raw.cfg). lcam001 -> CAMERA_FIRST ->
++         * hardware "imx376" (device_manager/include/project_hardware.h).
++         * For a BUILTIN camera the VDI drops OHOS_ABILITY_STREAM_AVAILABLE_EXTEND_CONFIGURATIONS
++         * (camera_host_vdi_impl.cpp GetCameraAbility), so the profiles the framework offers come only
++         * from basicAvailableConfigurations: triplets {format, width, height}, format = 1-based index into
++         * formatArray (metadata_enum_map.h): 1 RGBA_8888, 2 YCBCR_420_888 (ignored by the framework),
++         * 3 YCRCB_420_SP (NV21), 4 JPEG. Non-JPEG entries become preview profiles and, combined with each
++         * availableFpsRange pair, video profiles; JPEG entries become photo profiles.
++         * Sizes: 2x2-binned sensor (2592x1940 -> 1296x970) scaled to 4:3; keep them <= 1296x970 until the
++         * software path has a full-resolution demosaic.
++         */
+         ability_01 :: ability {
+             logicCameraId = "lcam001";
+             physicsCameraIds = [
+-                "CAMERA_FIRST",
+-                "CAMERA_SECOND"
++                "CAMERA_FIRST"
+             ];
+             metadata {
+                 aeAvailableAntiBandingModes = [
+                     "OHOS_CAMERA_AE_ANTIBANDING_MODE_OFF"
+                 ];
+-                aeAvailableModes = ["OHOS_CAMERA_AE_MODE_OFF"];
+-                availableFpsRange = [5, 10];
+-                cameraPosition = "OHOS_CAMERA_POSITION_FRONT";
++                aeAvailableModes = ["OHOS_CAMERA_AE_MODE_ON"];
++                availableFpsRange = [15, 30];
++                cameraPosition = "OHOS_CAMERA_POSITION_BACK";
+                 cameraType = "OHOS_CAMERA_TYPE_WIDE_ANGLE";
+                 cameraConnectionType ="OHOS_CAMERA_CONNECTION_TYPE_BUILTIN";
+-                cameraMemoryType ="OHOS_CAMERA_MEMORY_USERPTR";
++                cameraMemoryType ="OHOS_CAMERA_MEMORY_MMAP";
+                 faceDetectMaxNum = "10";
+                 aeCompensationRange = [0, 0];
+                 aeCompensationSteps = [0, 0];
+                 availableAwbModes = [
+-                    "OHOS_CAMERA_AWB_MODE_OFF"
++                    "OHOS_CAMERA_AWB_MODE_AUTO"
+                 ];
+-                sensitivityRange = [32, 2400];
++                sensitivityRange = [100, 1600];
+                 faceDetectMode = "OHOS_CAMERA_FACE_DETECT_MODE_OFF";
+                 availableCharacteristicsKeys = [
+                     "OHOS_CONTROL_AE_AVAILABLE_ANTIBANDING_MODES",
+@@ -181,6 +193,8 @@ root {
+                     "OHOS_JPEG_ORIENTATION"
+                 ];
+                 focalLength = "24.0";
++                /* mode lists as on rk3568 (the reference the system Camera app is tested on);
++                   the HDI accepts and ignores them: no AF/flash/manual exposure on this path */
+                 focusAvailableModes = [
+                     "OHOS_CAMERA_FOCUS_MODE_MANUAL",
+                     "OHOS_CAMERA_FOCUS_MODE_CONTINUOUS_AUTO",
+@@ -205,9 +219,8 @@ root {
+                     "OHOS_CAMERA_FLASH_MODE_ALWAYS_OPEN"
+                 ];
+                 mirrorSupported = "OHOS_CAMERA_MIRROR_OFF";
+-                basicAvailableConfigurations = [1, 640, 480, 4, 1280, 960];
+-                extendAvailableConfigurations = [0, 0, 1, 640, 480, 0, -1, 1, 1, 640, 480, 30, -1, 2, 4, 1280, 960, 0, -1, -1];
+-                sensorOrientationSupported = "270";
++                basicAvailableConfigurations = [1, 1280, 960, 1, 640, 480, 3, 1280, 960, 3, 640, 480, 4, 1280, 960];
++                sensorOrientationSupported = "90";
+                 videoStabilizationAvailableModes = [
+                     "OHOS_CAMERA_VIDEO_STABILIZATION_OFF"
+                 ];
+@@ -219,7 +232,7 @@ root {
+                     "1.0",
+                     "1.0"
+                 ];
+-                jpegOrientation= "270";
++                jpegOrientation= "90";
+                 jpegQuality= "2";
+             }
+         }
+diff --git a/fajita/hdf_config/uhdf/camera/pipeline_core/config.hcs b/fajita/hdf_config/uhdf/camera/pipeline_core/config.hcs
+index e7ab6ab1e044802f8d22cb3a8019e6d28abe9ea9..9fc3787af88cadcab90c114996b6ac99361430e9 100644
+--- a/fajita/hdf_config/uhdf/camera/pipeline_core/config.hcs
++++ b/fajita/hdf_config/uhdf/camera/pipeline_core/config.hcs
+@@ -28,15 +28,15 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+                 width = 0;
+                 height = 0;
+                 format = 0;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -58,7 +58,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -71,15 +71,15 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+                 width = 0;
+                 height = 0;
+                 format = 0;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -101,7 +101,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -114,15 +114,15 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+                 width = 0;
+                 height = 0;
+                 format = 0;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -144,7 +144,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -157,15 +157,15 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+                 width = 0;
+                 height = 0;
+                 format = 0;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -187,7 +187,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -219,18 +219,18 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 1;
+             }
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 1;
+             }
+         }
+-        RKScale_1 :: node_spec {
+-            name = "RKScale#0";
++        Scale_1 :: node_spec {
++            name = "Scale#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -241,12 +241,12 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+             }
+         }
+         Scale_2 :: node_spec {
+-            name = "RKScale#1";
++            name = "Scale#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -261,13 +261,13 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKCodec :: node_spec {
+-            name = "RKCodec#0";
++        Codec :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -284,7 +284,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -295,7 +295,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 0;
+             }
+         }
+@@ -327,18 +327,18 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 1;
+             }
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 1;
+             }
+         }
+-        RKScale_1 :: node_spec {
+-            name = "RKScale#0";
++        Scale_1 :: node_spec {
++            name = "Scale#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -349,12 +349,12 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+             }
+         }
+         Scale_2 :: node_spec {
+-            name = "RKScale#1";
++            name = "Scale#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -369,13 +369,13 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKCodec :: node_spec {
+-            name = "RKCodec#0";
++        Codec :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -392,7 +392,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -403,7 +403,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 0;
+             }
+         }
+@@ -441,7 +441,7 @@ root {
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 1;
+             }
+         }
+@@ -457,18 +457,18 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 1;
+             }
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#2";
++                peerPortNodeName = "Scale#2";
+                 direction = 1;
+             }
+         }
+-        RKScale_1 :: node_spec {
+-            name = "RKScale#0";
++        Scale_1 :: node_spec {
++            name = "Scale#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -483,8 +483,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKScale_2 :: node_spec {
+-            name = "RKScale#1";
++        Scale_2 :: node_spec {
++            name = "Scale#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -495,12 +495,12 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+             }
+         }
+-        RKScale_3 :: node_spec {
+-            name = "RKScale#2";
++        Scale_3 :: node_spec {
++            name = "Scale#2";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -521,23 +521,23 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 1;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -547,8 +547,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKCodec_2 :: node_spec {
+-            name = "RKCodec#1";
++        Codec_2 :: node_spec {
++            name = "Codec#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -559,17 +559,17 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKExif#0";
++                peerPortNodeName = "Exif#0";
+                 direction = 1;
+             }
+         }
+-        RKExif :: node_spec {
+-            name = "RKExif#0";
++        Exif :: node_spec {
++            name = "Exif#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -586,7 +586,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -597,7 +597,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#2";
++                peerPortNodeName = "Scale#2";
+                 direction = 0;
+             }
+         }
+@@ -608,7 +608,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKExif#0";
++                peerPortNodeName = "Exif#0";
+                 direction = 0;
+             }
+         }
+@@ -646,12 +646,12 @@ root {
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 1;
+             }
+         }
+-        RKScale_1 :: node_spec {
+-            name = "RKScale#0";
++        Scale_1 :: node_spec {
++            name = "Scale#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -672,13 +672,13 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 1;
+             }
+         }
+@@ -694,18 +694,18 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 1;
+             }
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#2";
++                peerPortNodeName = "Scale#2";
+                 direction = 1;
+             }
+         }
+-        RKScale_2 :: node_spec {
+-            name = "RKScale#1";
++        Scale_2 :: node_spec {
++            name = "Scale#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -716,12 +716,12 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+             }
+         }
+-        RKScale_3 :: node_spec {
+-            name = "RKScale#2";
++        Scale_3 :: node_spec {
++            name = "Scale#2";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -736,13 +736,13 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -752,8 +752,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKCodec_2 :: node_spec {
+-            name = "RKCodec#1";
++        Codec_2 :: node_spec {
++            name = "Codec#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -775,7 +775,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -786,7 +786,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#2";
++                peerPortNodeName = "Scale#2";
+                 direction = 0;
+             }
+         }
+@@ -797,7 +797,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 0;
+             }
+         }
+@@ -829,18 +829,18 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 1;
+             }
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 1;
+             }
+         }
+-        RKScale_1 :: node_spec {
+-            name = "RKScale#0";
++        Scale_1 :: node_spec {
++            name = "Scale#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -851,12 +851,12 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+             }
+         }
+-        RKScale_2 :: node_spec {
+-            name = "RKScale#1";
++        Scale_2 :: node_spec {
++            name = "Scale#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -867,17 +867,17 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKFace#0";
++                peerPortNodeName = "Face#0";
+                 direction = 1;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -887,13 +887,13 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKFace :: node_spec {
+-            name = "RKFace#0";
++        Face :: node_spec {
++            name = "Face#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -910,7 +910,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -921,7 +921,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKFace#0";
++                peerPortNodeName = "Face#0";
+                 direction = 0;
+             }
+         }
+@@ -998,18 +998,18 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 1;
+             }
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 1;
+             }
+         }
+-        RKScale_1 :: node_spec {
+-            name = "RKScale#0";
++        Scale_1 :: node_spec {
++            name = "Scale#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1020,12 +1020,12 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+             }
+         }
+-        RKScale_2 :: node_spec {
+-            name = "RKScale#1";
++        Scale_2 :: node_spec {
++            name = "Scale#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1046,23 +1046,23 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 1;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1072,8 +1072,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKCodec_2 :: node_spec {
+-            name = "RKCodec#1";
++        Codec_2 :: node_spec {
++            name = "Codec#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1084,17 +1084,17 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKExif#0";
++                peerPortNodeName = "Exif#0";
+                 direction = 1;
+             }
+         }
+-        RKExif_1 :: node_spec {
+-            name = "RKExif#0";
++        Exif_1 :: node_spec {
++            name = "Exif#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1111,7 +1111,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -1122,7 +1122,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKExif#0";
++                peerPortNodeName = "Exif#0";
+                 direction = 0;
+             }
+         }
+@@ -1151,18 +1151,18 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 1;
+             }
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 1;
+             }
+         }
+-        RKScale_1 :: node_spec {
+-            name = "RKScale#0";
++        Scale_1 :: node_spec {
++            name = "Scale#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1173,12 +1173,12 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+             }
+         }
+-        RKScale_2 :: node_spec {
+-            name = "RKScale#1";
++        Scale_2 :: node_spec {
++            name = "Scale#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1199,23 +1199,23 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 1;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1225,8 +1225,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKCodec_2 :: node_spec {
+-            name = "RKCodec#1";
++        Codec_2 :: node_spec {
++            name = "Codec#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1237,17 +1237,17 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKExif#0";
++                peerPortNodeName = "Exif#0";
+                 direction = 1;
+             }
+         }
+-        RKExif_1 :: node_spec {
+-            name = "RKExif#0";
++        Exif_1 :: node_spec {
++            name = "Exif#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1264,7 +1264,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -1275,7 +1275,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKExif#0";
++                peerPortNodeName = "Exif#0";
+                 direction = 0;
+             }
+         }
+@@ -1310,7 +1310,7 @@ root {
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 1;
+             }
+         }
+@@ -1326,18 +1326,18 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 1;
+             }
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#2";
++                peerPortNodeName = "Scale#2";
+                 direction = 1;
+             }
+         }
+-        RKScale_1 :: node_spec {
+-            name = "RKScale#0";
++        Scale_1 :: node_spec {
++            name = "Scale#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1352,8 +1352,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKScale_2 :: node_spec {
+-            name = "RKScale#1";
++        Scale_2 :: node_spec {
++            name = "Scale#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1364,12 +1364,12 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+             }
+         }
+-        RKScale_3 :: node_spec {
+-            name = "RKScale#2";
++        Scale_3 :: node_spec {
++            name = "Scale#2";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1380,7 +1380,7 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKFace#0";
++                peerPortNodeName = "Face#0";
+                 direction = 1;
+             }
+         }
+@@ -1390,23 +1390,23 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 1;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1416,8 +1416,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKCodec_2 :: node_spec {
+-            name = "RKCodec#1";
++        Codec_2 :: node_spec {
++            name = "Codec#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1428,17 +1428,17 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKExif#0";
++                peerPortNodeName = "Exif#0";
+                 direction = 1;
+             }
+         }
+-        RKExif_1 :: node_spec {
+-            name = "RKExif#0";
++        Exif_1 :: node_spec {
++            name = "Exif#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1448,13 +1448,13 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKFace :: node_spec {
+-            name = "RKFace#0";
++        Face :: node_spec {
++            name = "Face#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#2";
++                peerPortNodeName = "Scale#2";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1471,7 +1471,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -1482,7 +1482,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKExif#0";
++                peerPortNodeName = "Exif#0";
+                 direction = 0;
+             }
+         }
+@@ -1493,7 +1493,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKFace#0";
++                peerPortNodeName = "Face#0";
+                 direction = 0;
+             }
+         }
+@@ -1531,7 +1531,7 @@ root {
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#2";
++                peerPortNodeName = "Scale#2";
+                 direction = 1;
+             }
+         }
+@@ -1547,18 +1547,18 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 1;
+             }
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 1;
+             }
+         }
+-        RKScale_1 :: node_spec {
+-            name = "RKScale#0";
++        Scale_1 :: node_spec {
++            name = "Scale#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1569,12 +1569,12 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+             }
+         }
+-        RKScale_2 :: node_spec {
+-            name = "RKScale#1";
++        Scale_2 :: node_spec {
++            name = "Scale#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1589,8 +1589,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKScale_3 :: node_spec {
+-            name = "RKScale#2";
++        Scale_3 :: node_spec {
++            name = "Scale#2";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1601,7 +1601,7 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#2";
++                peerPortNodeName = "Codec#2";
+                 direction = 1;
+             }
+         }
+@@ -1611,23 +1611,23 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 1;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1637,8 +1637,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKCodec_2 :: node_spec {
+-            name = "RKCodec#1";
++        Codec_2 :: node_spec {
++            name = "Codec#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1649,17 +1649,17 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKExif#0";
++                peerPortNodeName = "Exif#0";
+                 direction = 1;
+             }
+         }
+-        RKCodec_3 :: node_spec {
+-            name = "RKCodec#2";
++        Codec_3 :: node_spec {
++            name = "Codec#2";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#2";
++                peerPortNodeName = "Scale#2";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1669,13 +1669,13 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKExif :: node_spec {
+-            name = "RKExif#0";
++        Exif :: node_spec {
++            name = "Exif#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1692,7 +1692,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -1703,7 +1703,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKExif#0";
++                peerPortNodeName = "Exif#0";
+                 direction = 0;
+             }
+         }
+@@ -1714,7 +1714,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#2";
++                peerPortNodeName = "Codec#2";
+                 direction = 0;
+             }
+         }
+@@ -1752,7 +1752,7 @@ root {
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#2";
++                peerPortNodeName = "Scale#2";
+                 direction = 1;
+             }
+         }
+@@ -1768,18 +1768,18 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 1;
+             }
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 1;
+             }
+         }
+-        RKScale_1 :: node_spec {
+-            name = "RKScale#0";
++        Scale_1 :: node_spec {
++            name = "Scale#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1790,12 +1790,12 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+             }
+         }
+-        RKScale_2 :: node_spec {
+-            name = "RKScale#1";
++        Scale_2 :: node_spec {
++            name = "Scale#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1810,8 +1810,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKScale_3 :: node_spec {
+-            name = "RKScale#2";
++        Scale_3 :: node_spec {
++            name = "Scale#2";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1822,7 +1822,7 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#2";
++                peerPortNodeName = "Codec#2";
+                 direction = 1;
+             }
+         }
+@@ -1832,23 +1832,23 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 1;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1858,8 +1858,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKCodec_2 :: node_spec {
+-            name = "RKCodec#1";
++        Codec_2 :: node_spec {
++            name = "Codec#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1870,17 +1870,17 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKExif#0";
++                peerPortNodeName = "Exif#0";
+                 direction = 1;
+             }
+         }
+-        RKCodec_3 :: node_spec {
+-            name = "RKCodec#2";
++        Codec_3 :: node_spec {
++            name = "Codec#2";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#2";
++                peerPortNodeName = "Scale#2";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1890,13 +1890,13 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKExif :: node_spec {
+-            name = "RKExif#0";
++        Exif :: node_spec {
++            name = "Exif#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -1913,7 +1913,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -1924,7 +1924,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKExif#0";
++                peerPortNodeName = "Exif#0";
+                 direction = 0;
+             }
+         }
+@@ -1935,7 +1935,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#2";
++                peerPortNodeName = "Codec#2";
+                 direction = 0;
+             }
+         }
+@@ -1964,18 +1964,18 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 1;
+             }
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 1;
+             }
+         }
+-        RKScale_1 :: node_spec {
+-            name = "RKScale#0";
++        Scale_1 :: node_spec {
++            name = "Scale#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -1986,12 +1986,12 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+             }
+         }
+-        RKScale_2 :: node_spec {
+-            name = "RKScale#1";
++        Scale_2 :: node_spec {
++            name = "Scale#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -2012,23 +2012,23 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 1;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -2038,8 +2038,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKCodec_2 :: node_spec {
+-            name = "RKCodec#1";
++        Codec_2 :: node_spec {
++            name = "Codec#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -2061,7 +2061,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -2072,7 +2072,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 0;
+             }
+         }
+@@ -2101,18 +2101,18 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 1;
+             }
+             out_port_1 :: port_spec {
+                 name = "out1";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 1;
+             }
+         }
+-        RKScale_1 :: node_spec {
+-            name = "RKScale#0";
++        Scale_1 :: node_spec {
++            name = "Scale#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -2123,12 +2123,12 @@ root {
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 1;
+             }
+         }
+-        RKScale_2 :: node_spec {
+-            name = "RKScale#1";
++        Scale_2 :: node_spec {
++            name = "Scale#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -2149,23 +2149,23 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#1";
++                peerPortNodeName = "Scale#1";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+                 name = "out0";
+                 peerPortName = "in0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 1;
+             }
+         }
+-        RKCodec_1 :: node_spec {
+-            name = "RKCodec#0";
++        Codec_1 :: node_spec {
++            name = "Codec#0";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKScale#0";
++                peerPortNodeName = "Scale#0";
+                 direction = 0;
+             }
+             out_port_0 :: port_spec {
+@@ -2175,8 +2175,8 @@ root {
+                 direction = 1;
+             }
+         }
+-        RKCodec_2 :: node_spec {
+-            name = "RKCodec#1";
++        Codec_2 :: node_spec {
++            name = "Codec#1";
+             status = "new";
+             in_port_0 :: port_spec {
+                 name = "in0";
+@@ -2198,7 +2198,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#0";
++                peerPortNodeName = "Codec#0";
+                 direction = 0;
+             }
+         }
+@@ -2209,7 +2209,7 @@ root {
+             in_port_0 :: port_spec {
+                 name = "in0";
+                 peerPortName = "out0";
+-                peerPortNodeName = "RKCodec#1";
++                peerPortNodeName = "Codec#1";
+                 direction = 0;
+             }
+         }

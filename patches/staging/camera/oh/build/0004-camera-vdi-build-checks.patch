@@ -1,0 +1,55 @@
+Build checks for the OnePlus 6 camera VDI (device/board/oneplus 0007), as rk3568's camera VDI has them:
+- core/gn/ohos_exec_script_allowlist.gni: its BUILD.gn may call exec_script (like rk3568's and dayu210's, it
+  touches the pipeline config sources it copies into drivers/peripheral/camera before GN reads them); without
+  the entry GN stops with "Disallowed exec_script call".
+- compile_standard_whitelist.json: its targets use external_deps and deps that the board's part
+  (qualcomm_products, no bundle.json listing its deps) does not declare, as the port's other vendor libraries
+  are allowed to; without the entries their __check steps fail ("need set part deps info to
+  qualcomm_products", "deps validation ... failed").
+
+diff --git a/compile_standard_whitelist.json b/compile_standard_whitelist.json
+index e2d42aa0261a1845fda68e4aa28f016f12ebc177..a2babfdc2f33815c36f0a155dc4c5fdbfff97c24 100644
+--- a/compile_standard_whitelist.json
++++ b/compile_standard_whitelist.json
+@@ -141,6 +141,9 @@
+         "//developtools/syscap_codec:syscap_tool_bin",
+         "//device/board/hihope/rk3568/camera/vdi_impl/v4l2/pipeline_core:camera_pipeline_core",
+         "//device/board/hihope/rk3568/camera/vdi_impl/v4l2:camera_host_vdi_impl_1.0",
++        "//device/board/oneplus/fajita/camera/vdi_impl/v4l2/pipeline_core:camera_pipeline_core",
++        "//device/board/oneplus/fajita/camera/vdi_impl/v4l2:camera_host_vdi_impl_1.0",
++        "//device/board/oneplus/fajita/camera/vdi_impl/v4l2:camera_pipeline_config",
+         "//device/soc/rockchip/rk3568/hardware/codec:libcodec_oem_interface",
+         "//device/soc/rockchip/rk3568/hardware/display:display_composer_vendor",
+         "//device/soc/rockchip/rk3568/hardware/display:display_gfx",
+@@ -447,6 +450,11 @@
+         "//device/board/hihope/rk3568/camera/vdi_impl/v4l2/pipeline_core:camera_ipp_algo_example",
+         "//device/board/hihope/rk3568/camera/vdi_impl/v4l2/pipeline_core:camera_pipeline_core",
+         "//device/board/hihope/rk3568/camera/vdi_impl/v4l2:camera_host_vdi_impl_1.0",
++        "//device/board/oneplus/fajita/camera/vdi_impl/v4l2/device_manager:camera_device_manager",
++        "//device/board/oneplus/fajita/camera/vdi_impl/v4l2/pipeline_core:camera_ipp_algo_example",
++        "//device/board/oneplus/fajita/camera/vdi_impl/v4l2/pipeline_core:camera_pipeline_core",
++        "//device/board/oneplus/fajita/camera/vdi_impl/v4l2:camera_host_vdi_impl_1.0",
++        "//device/board/oneplus/fajita/camera/vdi_impl/v4l2:camera_pipeline_config",
+         "//device/soc/rockchip/rk3568/hardware/codec/jpeg:libjpeg_vdi_impl",
+         "//device/soc/rockchip/rk3568/hardware/codec:libcodec_oem_interface",
+         "//device/soc/rockchip/rk3568/hardware/display:display_composer_vendor",
+@@ -598,6 +606,7 @@
+         "//base/security/huks/interfaces/inner_api/huks_lite:huks_server",
+         "//base/security/huks/utils/crypto_adapter:libhuks_utils_client_service_adapter_static",
+         "//device/board/hihope/rk3568/camera/vdi_impl/v4l2/pipeline_core:camera_pipeline_core",
++        "//device/board/oneplus/fajita/camera/vdi_impl/v4l2/pipeline_core:camera_pipeline_core",
+         "//device/soc/rockchip/rk3568/hardware/display:display_composer_vendor",
+         "//device/soc/rockchip/rk3568/hardware/display:libdisplay_buffer_vendor",
+         "//device/soc/rockchip/rk3568/hardware/display:libhigbm_vendor",
+diff --git a/core/gn/ohos_exec_script_allowlist.gni b/core/gn/ohos_exec_script_allowlist.gni
+index 37226d21ec6be0855d92e0e3e671711adc51b3a1..4d067eec3706006dedb94e7a3ebbb2ad9f99c67f 100644
+--- a/core/gn/ohos_exec_script_allowlist.gni
++++ b/core/gn/ohos_exec_script_allowlist.gni
+@@ -71,6 +71,7 @@ ohos_exec_script_config = {
+     "//device/board/kaihong/khdvk_3566b/camera/BUILD.gn",
+     "//device/board/lango/dev_wifi_a/hdf_drivers/gpio/BUILD.gn",
+     "//device/board/lango/dev_wifi_a/hdf_drivers/uart/BUILD.gn",
++    "//device/board/oneplus/fajita/camera/vdi_impl/v4l2/BUILD.gn",
+     "//device/board/openvalley/niobeu4/liteos_m/hdf_drivers/gpio/BUILD.gn",
+     "//device/board/openvalley/niobeu4/liteos_m/hdf_drivers/i2c/BUILD.gn",
+     "//device/board/openvalley/niobeu4/liteos_m/hdf_drivers/pwm/BUILD.gn",

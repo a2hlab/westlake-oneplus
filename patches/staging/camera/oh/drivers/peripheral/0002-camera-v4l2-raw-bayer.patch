@@ -1,0 +1,1111 @@
+Camera V4L2 adapter: raw Bayer capture nodes without an ISP (Qualcomm CAMSS on the OnePlus 6).
+
+Active only for nodes listed in /vendor/etc/camera/camss_raw.cfg; without that file nothing changes, so other
+products (rk3568, USB cameras) behave as before. Header-only additions, so the targets that compile these
+adapter files need no build change.
+- v4l2_fileformat.cpp: a node can match its camera by node name (CAMSS reports driver "qcom-camss" on every
+  node); S_FMT sets the raw Bayer format of the node (read from the RDI subdev with format=auto).
+- v4l2_buffer.cpp: at DQBUF, convert instead of copying: camss_soft_isp.h (2x2-binning demosaic, black
+  level, grey-world white balance, gamma, scaling, I420 BT.601); auto exposure through V4L2_CID_EXPOSURE and
+  V4L2_CID_ANALOGUE_GAIN on the sensor subdev.
+- v4l2_dev.cpp: look for the node once more if it appeared after the adapter's init (late sensor probe).
+- usb_camera node_utils.cpp: I420 (CAMERA_FORMAT_YCRCB_420_P, what the V4L2 source node delivers) maps to
+  AV_PIX_FMT_YUV420P for the software scale/codec nodes.
+
+diff --git a/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/include/camss_raw.h b/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/include/camss_raw.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..5da95941e02c90c010f4c7ae323b13c5c619df97
+--- /dev/null
++++ b/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/include/camss_raw.h
+@@ -0,0 +1,603 @@
++/*
++ * Copyright (c) 2026 OnePlus 6 OpenHarmony port.
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/*
++ * Raw Bayer capture nodes (Qualcomm CAMSS RDI and the like) for the V4L2 adapter.
++ *
++ * Active only for cameras listed in /vendor/etc/camera/camss_raw.cfg; without that file
++ * every function below is a no-op and the adapter behaves as before. One line per camera:
++ *
++ *   hw=imx376 video=msm_vfe0_video0 rdi=msm_vfe0_rdi0 sensor=imx376 format=auto black=64
++ *
++ *   hw      hardware name of the sensor in the board's project_hardware.h (DM_C_SENSOR entry)
++ *   video   name of the capture node (/sys/class/video4linux/videoN/name) or a /dev/videoN path
++ *   sensor  optional: name prefix of the sensor subdev (/sys/class/video4linux/v4l-subdevN/name);
++ *           when it can be opened, AE drives V4L2_CID_EXPOSURE / V4L2_CID_ANALOGUE_GAIN on it
++ *   rdi     optional: name of the subdev that feeds the capture node (CAMSS "msm_vfe0_rdi0"); with
++ *           format=auto the raw format and size are read from its pad 0 (VIDIOC_SUBDEV_G_FMT) at
++ *           every stream start, so the Bayer order follows the sensor's flips (IMX376 defaults to
++ *           hflip=vflip=1 = SBGGR10). Explicit width/height/format are the fallback when that fails.
++ *   width/height/format  the raw frame the media graph delivers (format: S{RGGB,GRBG,GBRG,BGGR}
++ *           {8,10,10P,12,12P} or auto); it is what VIDIOC_S_FMT is set to, whatever the pipeline asked
++ *   black   black level in sensor code units (default 64 for 10 bit)
++ *   gain    analogue gain model: sony:<c> (gain = c / (c - code), default sony:512) or
++ *           linear:<unity code>
++ *   ae      on|off (default on), awb on|off (default on), gamma (default 2.2)
++ *
++ * The media graph itself (links, subdev formats) must already be configured (camss_setup at boot,
++ * or media-ctl).
++ * Header only on purpose: v4l2_fileformat.cpp, v4l2_buffer.cpp and v4l2_dev.cpp are compiled by
++ * several targets (usb_camera adapter, board unit tests), none of which needs a BUILD change.
++ */
++#ifndef HOS_CAMERA_CAMSS_RAW_H
++#define HOS_CAMERA_CAMSS_RAW_H
++
++#include <cerrno>
++#include <cstdio>
++#include <cstring>
++#include <dirent.h>
++#include <fcntl.h>
++#include <linux/media-bus-format.h>
++#include <linux/v4l2-subdev.h>
++#include <linux/videodev2.h>
++#include <map>
++#include <memory>
++#include <mutex>
++#include <string>
++#include <sys/ioctl.h>
++#include <sys/stat.h>
++#include <sys/sysmacros.h>
++#include <unistd.h>
++#include <vector>
++#include "camss_soft_isp.h"
++
++#ifndef CAMERA_LOGE
++#define CAMERA_LOGE(fmt, ...)
++#endif
++#ifndef CAMERA_LOGI
++#define CAMERA_LOGI(fmt, ...)
++#endif
++
++namespace OHOS::Camera {
++namespace CamssRaw {
++constexpr const char *CONFIG_PATH = "/vendor/etc/camera/camss_raw.cfg";
++constexpr uint32_t AE_PERIOD = 4; // frames between sensor exposure updates (sensor latency ~2)
++
++struct Entry {
++    std::string hw;
++    std::string video;
++    std::string sensor;
++    std::string rdi;
++    bool autoFormat = false;
++    bool blackSet = false;
++    uint32_t width = 0;
++    uint32_t height = 0;
++    uint32_t fourcc = 0;
++    RawFrameDesc desc;
++    bool sonyGain = true;
++    double gainConst = 512.0;
++    bool ae = true;
++    bool awb = true;
++    float gamma = 2.2f;
++};
++
++struct Stream {
++    Entry entry;
++    RawFrameDesc desc;
++    uint32_t outW = 0;
++    uint32_t outH = 0;
++    SoftIsp isp;
++    SoftAuto3A auto3a;
++    int subdevFd = -1;
++    uint32_t frames = 0;
++    struct v4l2_queryctrl expCtrl = {};
++    struct v4l2_queryctrl gainCtrl = {};
++};
++
++inline std::mutex &Lock()
++{
++    static std::mutex lock;
++    return lock;
++}
++
++inline std::map<int, std::unique_ptr<Stream>> &Streams()
++{
++    static std::map<int, std::unique_ptr<Stream>> streams;
++    return streams;
++}
++
++inline std::string FourccName(uint32_t f)
++{
++    char s[5] = {static_cast<char>(f & 0xFF), static_cast<char>((f >> 8) & 0xFF),
++        static_cast<char>((f >> 16) & 0xFF), static_cast<char>((f >> 24) & 0xFF), '\0'};
++    return std::string(s);
++}
++
++inline std::string ReadLine(const std::string &path)
++{
++    char buf[128] = {0};
++    FILE *f = fopen(path.c_str(), "r");
++    if (f == nullptr) {
++        return "";
++    }
++    if (fgets(buf, sizeof(buf), f) == nullptr) {
++        buf[0] = '\0';
++    }
++    fclose(f);
++    std::string s(buf);
++    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) {
++        s.pop_back();
++    }
++    return s;
++}
++
++inline bool ParseFormat(const std::string &name, Entry &e)
++{
++    struct Fmt {
++        const char *name;
++        uint32_t fourcc;
++        BayerOrder order;
++        RawPacking packing;
++        uint32_t white;
++    };
++    static const Fmt FORMATS[] = {
++        {"SRGGB10P", V4L2_PIX_FMT_SRGGB10P, BayerOrder::RGGB, RawPacking::RAW10_CSI2P, 1023},
++        {"SGRBG10P", V4L2_PIX_FMT_SGRBG10P, BayerOrder::GRBG, RawPacking::RAW10_CSI2P, 1023},
++        {"SGBRG10P", V4L2_PIX_FMT_SGBRG10P, BayerOrder::GBRG, RawPacking::RAW10_CSI2P, 1023},
++        {"SBGGR10P", V4L2_PIX_FMT_SBGGR10P, BayerOrder::BGGR, RawPacking::RAW10_CSI2P, 1023},
++        {"SRGGB10", V4L2_PIX_FMT_SRGGB10, BayerOrder::RGGB, RawPacking::RAW10_LE16, 1023},
++        {"SGRBG10", V4L2_PIX_FMT_SGRBG10, BayerOrder::GRBG, RawPacking::RAW10_LE16, 1023},
++        {"SGBRG10", V4L2_PIX_FMT_SGBRG10, BayerOrder::GBRG, RawPacking::RAW10_LE16, 1023},
++        {"SBGGR10", V4L2_PIX_FMT_SBGGR10, BayerOrder::BGGR, RawPacking::RAW10_LE16, 1023},
++        {"SRGGB12P", V4L2_PIX_FMT_SRGGB12P, BayerOrder::RGGB, RawPacking::RAW12_CSI2P, 4095},
++        {"SGRBG12P", V4L2_PIX_FMT_SGRBG12P, BayerOrder::GRBG, RawPacking::RAW12_CSI2P, 4095},
++        {"SGBRG12P", V4L2_PIX_FMT_SGBRG12P, BayerOrder::GBRG, RawPacking::RAW12_CSI2P, 4095},
++        {"SBGGR12P", V4L2_PIX_FMT_SBGGR12P, BayerOrder::BGGR, RawPacking::RAW12_CSI2P, 4095},
++        {"SRGGB12", V4L2_PIX_FMT_SRGGB12, BayerOrder::RGGB, RawPacking::RAW12_LE16, 4095},
++        {"SGRBG12", V4L2_PIX_FMT_SGRBG12, BayerOrder::GRBG, RawPacking::RAW12_LE16, 4095},
++        {"SGBRG12", V4L2_PIX_FMT_SGBRG12, BayerOrder::GBRG, RawPacking::RAW12_LE16, 4095},
++        {"SBGGR12", V4L2_PIX_FMT_SBGGR12, BayerOrder::BGGR, RawPacking::RAW12_LE16, 4095},
++        {"SRGGB8", V4L2_PIX_FMT_SRGGB8, BayerOrder::RGGB, RawPacking::RAW8, 255},
++        {"SGRBG8", V4L2_PIX_FMT_SGRBG8, BayerOrder::GRBG, RawPacking::RAW8, 255},
++        {"SGBRG8", V4L2_PIX_FMT_SGBRG8, BayerOrder::GBRG, RawPacking::RAW8, 255},
++        {"SBGGR8", V4L2_PIX_FMT_SBGGR8, BayerOrder::BGGR, RawPacking::RAW8, 255},
++    };
++    for (const auto &f : FORMATS) {
++        if (name == f.name) {
++            e.fourcc = f.fourcc;
++            e.desc.order = f.order;
++            e.desc.packing = f.packing;
++            e.desc.whiteLevel = f.white;
++            e.desc.blackLevel = (f.white + 1) / 16; // 64 for 10 bit, 256 for 12, 16 for 8
++            return true;
++        }
++    }
++    return false;
++}
++
++inline void ParseLine(const std::string &line, std::vector<Entry> &entries)
++{
++    Entry e;
++    bool blackSet = false;
++    uint32_t black = 0;
++    size_t pos = 0;
++    while (pos < line.size()) {
++        size_t end = line.find_first_of(" \t", pos);
++        std::string tok = line.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
++        pos = (end == std::string::npos) ? line.size() : end + 1;
++        size_t eq = tok.find('=');
++        if (eq == std::string::npos) {
++            continue;
++        }
++        std::string key = tok.substr(0, eq);
++        std::string val = tok.substr(eq + 1);
++        if (key == "hw") {
++            e.hw = val;
++        } else if (key == "video") {
++            e.video = val;
++        } else if (key == "sensor") {
++            e.sensor = val;
++        } else if (key == "width") {
++            e.width = static_cast<uint32_t>(strtoul(val.c_str(), nullptr, 0));
++        } else if (key == "height") {
++            e.height = static_cast<uint32_t>(strtoul(val.c_str(), nullptr, 0));
++        } else if (key == "rdi") {
++            e.rdi = val;
++        } else if (key == "format" && val == "auto") {
++            e.autoFormat = true;
++        } else if (key == "format") {
++            if (!ParseFormat(val, e)) {
++                CAMERA_LOGE("camss_raw: unknown format %{public}s", val.c_str());
++                return;
++            }
++        } else if (key == "black") {
++            black = static_cast<uint32_t>(strtoul(val.c_str(), nullptr, 0));
++            blackSet = true;
++        } else if (key == "gain") {
++            e.sonyGain = val.compare(0, 5, "sony:") == 0;
++            size_t colon = val.find(':');
++            if (colon != std::string::npos) {
++                e.gainConst = strtod(val.c_str() + colon + 1, nullptr);
++            }
++        } else if (key == "ae") {
++            e.ae = val != "off";
++        } else if (key == "awb") {
++            e.awb = val != "off";
++        } else if (key == "gamma") {
++            e.gamma = strtof(val.c_str(), nullptr);
++        }
++    }
++    bool explicitFormat = e.fourcc != 0 && e.width >= 2 && e.height >= 2;
++    bool fromRdi = !e.rdi.empty() && (e.autoFormat || !explicitFormat);
++    if (e.hw.empty() || e.video.empty() || (!explicitFormat && !fromRdi)) {
++        CAMERA_LOGE("camss_raw: ignoring incomplete line: %{public}s", line.c_str());
++        return;
++    }
++    e.autoFormat = fromRdi;
++    e.blackSet = blackSet;
++    if (blackSet) {
++        e.desc.blackLevel = black;
++    }
++    if (e.gainConst <= 1.0 || e.gamma < 1.0f) {
++        e.gainConst = 512.0;
++        e.gamma = 2.2f;
++    }
++    e.desc.width = e.width;
++    e.desc.height = e.height;
++    entries.push_back(e);
++}
++
++inline const std::vector<Entry> &Entries()
++{
++    static std::vector<Entry> entries;
++    static std::once_flag once;
++    std::call_once(once, [] {
++        FILE *f = fopen(CONFIG_PATH, "r");
++        if (f == nullptr) {
++            return;
++        }
++        char buf[512];
++        while (fgets(buf, sizeof(buf), f) != nullptr) {
++            std::string line(buf);
++            size_t hash = line.find('#');
++            if (hash != std::string::npos) {
++                line.resize(hash);
++            }
++            while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
++                line.pop_back();
++            }
++            if (line.find('=') != std::string::npos) {
++                ParseLine(line, entries);
++            }
++        }
++        fclose(f);
++        CAMERA_LOGI("camss_raw: %{public}u raw camera(s) in %{public}s", static_cast<unsigned>(entries.size()),
++            CONFIG_PATH);
++    });
++    return entries;
++}
++
++// sysfs name of a char device node, e.g. /dev/video3 -> "msm_vfe0_video0"
++inline std::string NodeNameOfRdev(dev_t rdev)
++{
++    char path[64];
++    (void)snprintf(path, sizeof(path), "/sys/dev/char/%u:%u/name", major(rdev), minor(rdev));
++    return ReadLine(path);
++}
++
++inline bool EntryMatchesNode(const Entry &e, const std::string &devPath, dev_t rdev)
++{
++    if (e.video.compare(0, 5, "/dev/") == 0) {
++        struct stat st = {};
++        return stat(e.video.c_str(), &st) == 0 && st.st_rdev == rdev;
++    }
++    return NodeNameOfRdev(rdev) == e.video;
++}
++
++// V4L2MatchDevice: does /dev/videoN belong to the raw camera named hwName?
++inline bool MatchNode(const std::string &devPath, const std::string &hwName)
++{
++    struct stat st = {};
++    if (stat(devPath.c_str(), &st) != 0) {
++        return false;
++    }
++    for (const auto &e : Entries()) {
++        if (e.hw == hwName && EntryMatchesNode(e, devPath, st.st_rdev)) {
++            CAMERA_LOGI("camss_raw: %{public}s is %{public}s", devPath.c_str(), hwName.c_str());
++            return true;
++        }
++    }
++    return false;
++}
++
++inline const Entry *EntryOfFd(int fd)
++{
++    struct stat st = {};
++    if (Entries().empty() || fstat(fd, &st) != 0 || !S_ISCHR(st.st_mode)) {
++        return nullptr;
++    }
++    for (const auto &e : Entries()) {
++        if (EntryMatchesNode(e, "", st.st_rdev)) {
++            return &e;
++        }
++    }
++    return nullptr;
++}
++
++// media bus code of a CAMSS RDI pad -> the capture node's pixel format (CAMSS RDI writes 10/12-bit
++// Bayer MIPI-packed), Bayer order, packing and white level
++inline bool ApplyMbusCode(uint32_t code, Entry &e)
++{
++    struct Map {
++        uint32_t code;
++        const char *name;
++    };
++    static const Map MAPS[] = {
++        {MEDIA_BUS_FMT_SRGGB10_1X10, "SRGGB10P"}, {MEDIA_BUS_FMT_SGRBG10_1X10, "SGRBG10P"},
++        {MEDIA_BUS_FMT_SGBRG10_1X10, "SGBRG10P"}, {MEDIA_BUS_FMT_SBGGR10_1X10, "SBGGR10P"},
++        {MEDIA_BUS_FMT_SRGGB12_1X12, "SRGGB12P"}, {MEDIA_BUS_FMT_SGRBG12_1X12, "SGRBG12P"},
++        {MEDIA_BUS_FMT_SGBRG12_1X12, "SGBRG12P"}, {MEDIA_BUS_FMT_SBGGR12_1X12, "SBGGR12P"},
++        {MEDIA_BUS_FMT_SRGGB8_1X8, "SRGGB8"}, {MEDIA_BUS_FMT_SGRBG8_1X8, "SGRBG8"},
++        {MEDIA_BUS_FMT_SGBRG8_1X8, "SGBRG8"}, {MEDIA_BUS_FMT_SBGGR8_1X8, "SBGGR8"},
++    };
++    for (const auto &m : MAPS) {
++        if (m.code == code) {
++            uint32_t black = e.desc.blackLevel;
++            bool ok = ParseFormat(m.name, e);
++            if (ok && e.blackSet) {
++                e.desc.blackLevel = black;
++            }
++            return ok;
++        }
++    }
++    return false;
++}
++
++// /dev/v4l-subdevN whose sysfs name equals name (exact) or starts with it (prefix)
++inline int OpenSubdev(const std::string &name, bool prefix)
++{
++    if (name.empty()) {
++        return -1;
++    }
++    DIR *dir = opendir("/sys/class/video4linux");
++    if (dir == nullptr) {
++        return -1;
++    }
++    int fd = -1;
++    struct dirent *ent = nullptr;
++    while ((ent = readdir(dir)) != nullptr) {
++        std::string node(ent->d_name);
++        if (node.compare(0, 10, "v4l-subdev") != 0) {
++            continue;
++        }
++        std::string n = ReadLine("/sys/class/video4linux/" + node + "/name");
++        if (prefix ? n.compare(0, name.size(), name) == 0 : n == name) {
++            fd = open(("/dev/" + node).c_str(), O_RDWR | O_CLOEXEC);
++            CAMERA_LOGI("camss_raw: subdev /dev/%{public}s (%{public}s) fd %{public}d errno %{public}d",
++                node.c_str(), n.c_str(), fd, fd < 0 ? errno : 0);
++            break;
++        }
++    }
++    closedir(dir);
++    return fd;
++}
++
++// format=auto: the active format on the RDI subdev's sink pad, as set at boot (camss_setup / media-ctl)
++inline bool ResolveFromRdi(Entry &e)
++{
++    int fd = OpenSubdev(e.rdi, false);
++    if (fd < 0) {
++        return false;
++    }
++    struct v4l2_subdev_format f = {};
++    f.which = V4L2_SUBDEV_FORMAT_ACTIVE;
++    f.pad = 0;
++    int ret = ioctl(fd, VIDIOC_SUBDEV_G_FMT, &f);
++    close(fd);
++    if (ret < 0 || f.format.width < 2 || f.format.height < 2 || !ApplyMbusCode(f.format.code, e)) {
++        CAMERA_LOGE("camss_raw: %{public}s pad 0: ret %{public}d code 0x%{public}x %{public}ux%{public}u not usable",
++            e.rdi.c_str(), ret, f.format.code, f.format.width, f.format.height);
++        return false;
++    }
++    e.width = f.format.width;
++    e.height = f.format.height;
++    e.desc.width = e.width;
++    e.desc.height = e.height;
++    return true;
++}
++
++inline int OpenSensorSubdev(const std::string &prefix)
++{
++    return OpenSubdev(prefix, true);
++}
++
++inline double GainOfCode(const Entry &e, int32_t code)
++{
++    if (e.sonyGain) {
++        double den = e.gainConst - code;
++        return den > 0 ? e.gainConst / den : 1.0;
++    }
++    return code / e.gainConst;
++}
++
++inline int32_t CodeOfGain(const Entry &e, double gain)
++{
++    if (e.sonyGain) {
++        return static_cast<int32_t>(e.gainConst - e.gainConst / gain + 0.5);
++    }
++    return static_cast<int32_t>(gain * e.gainConst + 0.5);
++}
++
++inline void InitSensorControl(Stream &s)
++{
++    s.auto3a.limits.sensorControl = false;
++    s.auto3a.limits.minDgain = 0.25;
++    s.auto3a.limits.maxDgain = 16.0;
++    if (!s.entry.ae || s.subdevFd < 0) {
++        return;
++    }
++    s.expCtrl.id = V4L2_CID_EXPOSURE;
++    s.gainCtrl.id = V4L2_CID_ANALOGUE_GAIN;
++    struct v4l2_control exp = {V4L2_CID_EXPOSURE, 0};
++    struct v4l2_control gain = {V4L2_CID_ANALOGUE_GAIN, 0};
++    if (ioctl(s.subdevFd, VIDIOC_QUERYCTRL, &s.expCtrl) < 0 || ioctl(s.subdevFd, VIDIOC_QUERYCTRL, &s.gainCtrl) < 0 ||
++        ioctl(s.subdevFd, VIDIOC_G_CTRL, &exp) < 0 || ioctl(s.subdevFd, VIDIOC_G_CTRL, &gain) < 0) {
++        CAMERA_LOGE("camss_raw: sensor exposure/gain controls not usable, errno %{public}d", errno);
++        return;
++    }
++    s.auto3a.limits.sensorControl = true;
++    s.auto3a.limits.minLines = std::max(1, s.expCtrl.minimum);
++    s.auto3a.limits.maxLines = std::max(s.expCtrl.minimum, s.expCtrl.maximum);
++    s.auto3a.limits.maxAgain = std::max(1.0, GainOfCode(s.entry, s.gainCtrl.maximum));
++    s.auto3a.limits.minDgain = 1.0;
++    s.auto3a.limits.maxDgain = 4.0;
++    s.auto3a.exposure.lines = std::max(1, exp.value);
++    s.auto3a.exposure.again = std::max(1.0, GainOfCode(s.entry, gain.value));
++    CAMERA_LOGI("camss_raw: exposure %{public}d [%{public}d..%{public}d] lines, gain code %{public}d max %{public}d",
++        exp.value, s.expCtrl.minimum, s.expCtrl.maximum, gain.value, s.gainCtrl.maximum);
++}
++
++inline void ApplySensorExposure(Stream &s)
++{
++    if (!s.auto3a.limits.sensorControl) {
++        return;
++    }
++    struct v4l2_control exp = {V4L2_CID_EXPOSURE, static_cast<int32_t>(s.auto3a.exposure.lines + 0.5)};
++    int32_t code = CodeOfGain(s.entry, s.auto3a.exposure.again);
++    code = std::min(std::max(code, s.gainCtrl.minimum), s.gainCtrl.maximum);
++    struct v4l2_control gain = {V4L2_CID_ANALOGUE_GAIN, code};
++    if (ioctl(s.subdevFd, VIDIOC_S_CTRL, &exp) < 0 || ioctl(s.subdevFd, VIDIOC_S_CTRL, &gain) < 0) {
++        CAMERA_LOGE("camss_raw: set exposure/gain failed, errno %{public}d", errno);
++    }
++}
++
++// V4L2SetFmt: for a raw node, set the configured raw format instead of the pipeline's YUV request
++// and remember the request (size) as the output of the software conversion. Returns false when fd
++// is not a raw node (caller continues as usual).
++inline bool SetFormat(int fd, uint32_t bufType, uint32_t reqWidth, uint32_t reqHeight, uint32_t reqFourcc, bool &ok)
++{
++    const Entry *configured = EntryOfFd(fd);
++    if (configured == nullptr) {
++        return false;
++    }
++    ok = false;
++    Entry resolved = *configured;
++    const Entry *e = &resolved;
++    if (resolved.autoFormat && !ResolveFromRdi(resolved)) {
++        resolved = *configured;
++        if (resolved.fourcc == 0 || resolved.width < 2 || resolved.height < 2) {
++            CAMERA_LOGE("camss_raw: %{public}s: no raw format (rdi %{public}s unreadable, no explicit format)",
++                resolved.hw.c_str(), resolved.rdi.c_str());
++            return true;
++        }
++        CAMERA_LOGE("camss_raw: %{public}s: rdi format unreadable, using the configured %{public}s %{public}ux%{public}u",
++            resolved.hw.c_str(), FourccName(resolved.fourcc).c_str(), resolved.width, resolved.height);
++    }
++    struct v4l2_format fmt = {};
++    fmt.type = bufType;
++    if (bufType == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
++        fmt.fmt.pix_mp.pixelformat = e->fourcc;
++        fmt.fmt.pix_mp.width = e->width;
++        fmt.fmt.pix_mp.height = e->height;
++        fmt.fmt.pix_mp.field = V4L2_FIELD_NONE;
++        fmt.fmt.pix_mp.num_planes = 1;
++    } else {
++        fmt.fmt.pix.pixelformat = e->fourcc;
++        fmt.fmt.pix.width = e->width;
++        fmt.fmt.pix.height = e->height;
++        fmt.fmt.pix.field = V4L2_FIELD_NONE;
++    }
++    if (ioctl(fd, VIDIOC_S_FMT, &fmt) < 0) {
++        CAMERA_LOGE("camss_raw: VIDIOC_S_FMT %{public}ux%{public}u failed: %{public}s", e->width, e->height,
++            strerror(errno));
++        return true;
++    }
++    bool mp = bufType == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
++    uint32_t pixfmt = mp ? fmt.fmt.pix_mp.pixelformat : fmt.fmt.pix.pixelformat;
++    uint32_t w = mp ? fmt.fmt.pix_mp.width : fmt.fmt.pix.width;
++    uint32_t h = mp ? fmt.fmt.pix_mp.height : fmt.fmt.pix.height;
++    uint32_t bpl = mp ? fmt.fmt.pix_mp.plane_fmt[0].bytesperline : fmt.fmt.pix.bytesperline;
++    if (pixfmt != e->fourcc || w != e->width || h != e->height) {
++        CAMERA_LOGE("camss_raw: driver set %{public}s %{public}ux%{public}u, wanted %{public}s %{public}ux%{public}u",
++            FourccName(pixfmt).c_str(), w, h, FourccName(e->fourcc).c_str(), e->width, e->height);
++        return true;
++    }
++    auto s = std::make_unique<Stream>();
++    s->entry = *e;
++    s->desc = e->desc;
++    s->desc.bytesPerLine = bpl;
++    s->outW = (reqWidth >= 2 ? reqWidth : e->width / 2) & ~1u;
++    s->outH = (reqHeight >= 2 ? reqHeight : e->height / 2) & ~1u;
++    s->isp.SetGamma(e->gamma);
++    s->subdevFd = e->ae ? OpenSensorSubdev(e->sensor) : -1;
++    InitSensorControl(*s);
++    CAMERA_LOGI("camss_raw: %{public}s raw %{public}ux%{public}u bpl %{public}u -> I420 %{public}ux%{public}u "
++        "(pipeline asked %{public}s)", e->hw.c_str(), w, h, bpl, s->outW, s->outH, FourccName(reqFourcc).c_str());
++    std::lock_guard<std::mutex> l(Lock());
++    auto it = Streams().find(fd);
++    if (it != Streams().end() && it->second->subdevFd >= 0) {
++        close(it->second->subdevFd);
++    }
++    Streams()[fd] = std::move(s);
++    ok = true;
++    return true;
++}
++
++inline bool IsRaw(int fd)
++{
++    std::lock_guard<std::mutex> l(Lock());
++    return Streams().count(fd) != 0;
++}
++
++// V4L2DequeueBuffer: raw frame (mmap'ed V4L2 buffer) -> I420 in the pipeline's buffer.
++inline bool Convert(int fd, const void *raw, uint32_t bytesUsed, void *out, uint32_t outSize)
++{
++    std::lock_guard<std::mutex> l(Lock());
++    auto it = Streams().find(fd);
++    if (it == Streams().end()) {
++        return false;
++    }
++    Stream &s = *it->second;
++    s.isp.SetGains(s.entry.awb ? s.auto3a.gainR : 1.0, s.entry.awb ? s.auto3a.gainB : 1.0, s.auto3a.exposure.dgain);
++    SoftIspStats stats;
++    if (!s.isp.ToI420(static_cast<const uint8_t *>(raw), bytesUsed, s.desc, static_cast<uint8_t *>(out), outSize,
++        s.outW, s.outH, &stats)) {
++        CAMERA_LOGE("camss_raw: conversion failed (raw %{public}u bytes, out %{public}u bytes for %{public}ux"
++            "%{public}u)", bytesUsed, outSize, s.outW, s.outH);
++        return false;
++    }
++    if (s.entry.awb) {
++        s.auto3a.UpdateAwb(stats);
++    }
++    if (s.entry.ae && (++s.frames % AE_PERIOD) == 0 && s.auto3a.UpdateAe(stats)) {
++        ApplySensorExposure(s);
++    }
++    return true;
++}
++
++inline void Release(int fd)
++{
++    std::lock_guard<std::mutex> l(Lock());
++    auto it = Streams().find(fd);
++    if (it != Streams().end()) {
++        if (it->second->subdevFd >= 0) {
++            close(it->second->subdevFd);
++        }
++        Streams().erase(it);
++    }
++}
++} // namespace CamssRaw
++} // namespace OHOS::Camera
++#endif // HOS_CAMERA_CAMSS_RAW_H
+diff --git a/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/include/camss_soft_isp.h b/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/include/camss_soft_isp.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..74ae9fe9c0efd6b3b22061baa29f27b02a561c48
+--- /dev/null
++++ b/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/include/camss_soft_isp.h
+@@ -0,0 +1,366 @@
++/*
++ * Copyright (c) 2026 OnePlus 6 OpenHarmony port.
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/*
++ * Minimal software ISP for sensors behind an ISP-less capture path (Qualcomm CAMSS RDI):
++ * raw Bayer -> I420 (YUV 4:2:0 planar, BT.601 limited range), the layout the V4L2 source node
++ * hands on as CAMERA_FORMAT_YCRCB_420_P (same as rk3568's rkisp YUV420 output).
++ *
++ * Per output pixel one 2x2 Bayer quad is sampled (nearest quad, i.e. 2x2 binning plus a
++ * nearest-neighbour scale), black level removed, white-balance + digital gain applied and a
++ * gamma LUT used. Chroma is the mean of the 2x2 output block. Statistics for AE/AWB are taken
++ * on every 4th output pixel in both directions. Header only, no OpenHarmony dependencies.
++ */
++#ifndef HOS_CAMERA_CAMSS_SOFT_ISP_H
++#define HOS_CAMERA_CAMSS_SOFT_ISP_H
++
++#include <algorithm>
++#include <cmath>
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++namespace OHOS::Camera {
++enum class BayerOrder : uint8_t { RGGB = 0, GRBG = 1, GBRG = 2, BGGR = 3 };
++enum class RawPacking : uint8_t { RAW8 = 0, RAW10_CSI2P, RAW10_LE16, RAW12_CSI2P, RAW12_LE16 };
++
++struct RawFrameDesc {
++    uint32_t width = 0;
++    uint32_t height = 0;
++    uint32_t bytesPerLine = 0;
++    BayerOrder order = BayerOrder::RGGB;
++    RawPacking packing = RawPacking::RAW10_CSI2P;
++    uint32_t blackLevel = 64;   // in the packing's native code units
++    uint32_t whiteLevel = 1023; // idem
++};
++
++struct SoftIspStats {
++    uint64_t sumR = 0; // near-neutral samples only (AWB): linear, black removed, 12-bit, before gains
++    uint64_t sumG = 0;
++    uint64_t sumB = 0;
++    uint32_t count = 0;
++    uint64_t sumY = 0; // all unclipped samples (AE): luma after white balance, before digital gain
++    uint32_t countY = 0;
++    uint32_t saturated = 0;
++};
++
++class SoftIsp {
++public:
++    static constexpr uint32_t LIN_MAX = 4095;
++
++    SoftIsp()
++    {
++        SetGamma(2.2f);
++        SetGains(1.0f, 1.0f, 1.0f);
++    }
++
++    void SetGamma(float gamma)
++    {
++        for (uint32_t i = 0; i <= LIN_MAX; i++) {
++            float v = std::pow(static_cast<float>(i) / LIN_MAX, 1.0f / gamma);
++            lut_[i] = static_cast<uint8_t>(std::min(255.0f, v * 255.0f + 0.5f));
++        }
++    }
++
++    // wbR/wbB: white-balance gains relative to green; digital: gain applied to all channels.
++    void SetGains(float wbR, float wbB, float digital)
++    {
++        wbR_ = std::max(1u, Q8(wbR));
++        wbB_ = std::max(1u, Q8(wbB));
++        gainR_ = std::max(1u, Q8(wbR * digital));
++        gainG_ = std::max(1u, Q8(digital));
++        gainB_ = std::max(1u, Q8(wbB * digital));
++    }
++
++    // raw: bytesUsed bytes laid out as d; out: I420 of outW x outH (both even).
++    bool ToI420(const uint8_t *raw, size_t bytesUsed, const RawFrameDesc &d,
++        uint8_t *out, size_t outSize, uint32_t outW, uint32_t outH, SoftIspStats *stats)
++    {
++        outW &= ~1u;
++        outH &= ~1u;
++        if (raw == nullptr || out == nullptr || d.width < 2 || d.height < 2 || outW == 0 || outH == 0) {
++            return false;
++        }
++        if (static_cast<size_t>(outW) * outH * 3 / 2 > outSize) {
++            return false;
++        }
++        if (static_cast<size_t>(d.bytesPerLine) * d.height > bytesUsed || d.bytesPerLine < MinLineBytes(d)) {
++            return false;
++        }
++        switch (d.packing) {
++            case RawPacking::RAW8:
++                Convert<RawPacking::RAW8>(raw, d, out, outW, outH, stats);
++                break;
++            case RawPacking::RAW10_CSI2P:
++                Convert<RawPacking::RAW10_CSI2P>(raw, d, out, outW, outH, stats);
++                break;
++            case RawPacking::RAW10_LE16:
++                Convert<RawPacking::RAW10_LE16>(raw, d, out, outW, outH, stats);
++                break;
++            case RawPacking::RAW12_CSI2P:
++                Convert<RawPacking::RAW12_CSI2P>(raw, d, out, outW, outH, stats);
++                break;
++            case RawPacking::RAW12_LE16:
++                Convert<RawPacking::RAW12_LE16>(raw, d, out, outW, outH, stats);
++                break;
++            default:
++                return false;
++        }
++        return true;
++    }
++
++    static uint32_t MinLineBytes(const RawFrameDesc &d)
++    {
++        switch (d.packing) {
++            case RawPacking::RAW8:
++                return d.width;
++            case RawPacking::RAW10_CSI2P:
++                return (d.width + 3) / 4 * 5;
++            case RawPacking::RAW12_CSI2P:
++                return (d.width + 1) / 2 * 3;
++            default:
++                return d.width * 2;
++        }
++    }
++
++private:
++    static uint32_t Q8(float v)
++    {
++        return static_cast<uint32_t>(std::max(0.0f, v) * 256.0f + 0.5f);
++    }
++
++    template <RawPacking P>
++    static inline uint32_t Sample(const uint8_t *row, uint32_t x)
++    {
++        if constexpr (P == RawPacking::RAW8) {
++            return row[x];
++        } else if constexpr (P == RawPacking::RAW10_CSI2P) {
++            const uint8_t *g = row + (x >> 2) * 5;
++            uint32_t i = x & 3;
++            return (static_cast<uint32_t>(g[i]) << 2) | ((g[4] >> (i * 2)) & 0x3);
++        } else if constexpr (P == RawPacking::RAW12_CSI2P) {
++            const uint8_t *g = row + (x >> 1) * 3;
++            uint32_t i = x & 1;
++            return (static_cast<uint32_t>(g[i]) << 4) | ((g[2] >> (i * 4)) & 0xF);
++        } else if constexpr (P == RawPacking::RAW10_LE16) {
++            return (row[x * 2] | (static_cast<uint32_t>(row[x * 2 + 1]) << 8)) & 0x3FF;
++        } else {
++            return (row[x * 2] | (static_cast<uint32_t>(row[x * 2 + 1]) << 8)) & 0xFFF;
++        }
++    }
++
++    // AE uses every unclipped sample; grey-world AWB only those that are near neutral under the
++    // current white balance (r/g and b/g within 1/2..2), so large coloured areas do not tint the result.
++    inline void Accumulate(SoftIspStats &st, uint32_t r, uint32_t g, uint32_t b, bool clipped) const
++    {
++        if (clipped) {
++            st.saturated++;
++            return;
++        }
++        uint32_t rw = r * wbR_ / 256;
++        uint32_t bw = b * wbB_ / 256;
++        st.sumY += (rw * 77 + g * 150 + bw * 29) / 256;
++        st.countY++;
++        if (g > 16 && rw * 2 >= g && rw <= g * 2 && bw * 2 >= g && bw <= g * 2) {
++            st.sumR += r;
++            st.sumG += g;
++            st.sumB += b;
++            st.count++;
++        }
++    }
++
++    static inline uint8_t Clip8(int v)
++    {
++        return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
++    }
++
++    template <RawPacking P>
++    void Convert(const uint8_t *raw, const RawFrameDesc &d, uint8_t *out, uint32_t outW, uint32_t outH,
++        SoftIspStats *stats)
++    {
++        // index (0..3 = (0,0) (0,1) (1,0) (1,1)) of R and B in a quad, per Bayer order
++        static const uint8_t R_INDEX[4] = {0, 1, 2, 3};
++        static const uint8_t B_INDEX[4] = {3, 2, 1, 0};
++        const uint32_t ri = R_INDEX[static_cast<uint32_t>(d.order) & 3];
++        const uint32_t bi = B_INDEX[static_cast<uint32_t>(d.order) & 3];
++        uint32_t gi[2];
++        for (uint32_t i = 0, n = 0; i < 4; i++) {
++            if (i != ri && i != bi) {
++                gi[n++] = i;
++            }
++        }
++        const uint32_t black = d.blackLevel;
++        const uint32_t range = d.whiteLevel > black ? d.whiteLevel - black : 1;
++        const uint32_t norm = (LIN_MAX << 16) / range; // Q16, native code -> 12-bit linear
++        const uint32_t satLevel = d.whiteLevel - d.whiteLevel / 32;
++        const uint32_t quadW = d.width / 2;
++        const uint32_t quadH = d.height / 2;
++
++        colX_.resize(outW);
++        for (uint32_t ox = 0; ox < outW; ox++) {
++            colX_[ox] = static_cast<uint32_t>(static_cast<uint64_t>(ox) * quadW / outW) * 2;
++        }
++        uint8_t *yPlane = out;
++        uint8_t *uPlane = out + static_cast<size_t>(outW) * outH;
++        uint8_t *vPlane = uPlane + static_cast<size_t>(outW / 2) * (outH / 2);
++        SoftIspStats st;
++
++        for (uint32_t oy = 0; oy < outH; oy += 2) {
++            const uint8_t *rows[2][2];
++            for (uint32_t dy = 0; dy < 2; dy++) {
++                uint32_t sy = static_cast<uint32_t>(static_cast<uint64_t>(oy + dy) * quadH / outH) * 2;
++                rows[dy][0] = raw + static_cast<size_t>(sy) * d.bytesPerLine;
++                rows[dy][1] = rows[dy][0] + d.bytesPerLine;
++            }
++            uint8_t *y0 = yPlane + static_cast<size_t>(oy) * outW;
++            uint8_t *y1 = y0 + outW;
++            uint8_t *u = uPlane + static_cast<size_t>(oy / 2) * (outW / 2);
++            uint8_t *v = vPlane + static_cast<size_t>(oy / 2) * (outW / 2);
++            for (uint32_t ox = 0; ox < outW; ox += 2) {
++                int sumR = 0;
++                int sumG = 0;
++                int sumB = 0;
++                for (uint32_t dy = 0; dy < 2; dy++) {
++                    uint8_t *yRow = dy == 0 ? y0 : y1;
++                    for (uint32_t dx = 0; dx < 2; dx++) {
++                        uint32_t x = colX_[ox + dx];
++                        uint32_t q[4] = {
++                            Sample<P>(rows[dy][0], x), Sample<P>(rows[dy][0], x + 1),
++                            Sample<P>(rows[dy][1], x), Sample<P>(rows[dy][1], x + 1),
++                        };
++                        uint32_t r = q[ri] > black ? q[ri] - black : 0;
++                        uint32_t g = ((q[gi[0]] > black ? q[gi[0]] - black : 0) +
++                                      (q[gi[1]] > black ? q[gi[1]] - black : 0)) >> 1;
++                        uint32_t b = q[bi] > black ? q[bi] - black : 0;
++                        r = std::min(LIN_MAX, (r * norm) >> 16);
++                        g = std::min(LIN_MAX, (g * norm) >> 16);
++                        b = std::min(LIN_MAX, (b * norm) >> 16);
++                        bool clipped = q[0] >= satLevel || q[1] >= satLevel || q[2] >= satLevel || q[3] >= satLevel;
++                        if (((ox + dx) & 3) == 0 && ((oy + dy) & 3) == 0) {
++                            Accumulate(st, r, g, b, clipped);
++                        }
++                        int r8 = 255;
++                        int g8 = 255;
++                        int b8 = 255;
++                        if (!clipped) { // clipped highlights stay white instead of turning magenta/blue
++                            r8 = lut_[std::min(LIN_MAX, (r * gainR_) >> 8)];
++                            g8 = lut_[std::min(LIN_MAX, (g * gainG_) >> 8)];
++                            b8 = lut_[std::min(LIN_MAX, (b * gainB_) >> 8)];
++                        }
++                        yRow[ox + dx] = Clip8(((66 * r8 + 129 * g8 + 25 * b8 + 128) >> 8) + 16);
++                        sumR += r8;
++                        sumG += g8;
++                        sumB += b8;
++                    }
++                }
++                sumR >>= 2;
++                sumG >>= 2;
++                sumB >>= 2;
++                u[ox / 2] = Clip8(((-38 * sumR - 74 * sumG + 112 * sumB + 128) >> 8) + 128);
++                v[ox / 2] = Clip8(((112 * sumR - 94 * sumG - 18 * sumB + 128) >> 8) + 128);
++            }
++        }
++        if (stats != nullptr) {
++            *stats = st;
++        }
++    }
++
++    uint8_t lut_[LIN_MAX + 1] = {};
++    uint32_t gainR_ = 256; // Q8, white balance x digital gain
++    uint32_t gainG_ = 256;
++    uint32_t gainB_ = 256;
++    uint32_t wbR_ = 256; // Q8, white balance only (statistics)
++    uint32_t wbB_ = 256;
++    std::vector<uint32_t> colX_;
++};
++
++/*
++ * Grey-world AWB and a mean-luminance AE that splits the wanted exposure into sensor
++ * exposure lines, sensor analogue gain and the software digital gain. Pure arithmetic;
++ * the caller reads/writes the sensor controls.
++ */
++class SoftAuto3A {
++public:
++    struct Limits {
++        double minLines = 1;
++        double maxLines = 1;
++        double maxAgain = 1;
++        double minDgain = 1.0;
++        double maxDgain = 8.0;
++        bool sensorControl = false;
++    };
++    struct Exposure {
++        double lines = 1;
++        double again = 1;
++        double dgain = 1;
++    };
++
++    double gainR = 1.8; // a daylight-ish start for Sony RGB sensors
++    double gainB = 1.6;
++    Exposure exposure;
++    Limits limits;
++    double target = 0.18; // linear mid grey
++
++    void UpdateAwb(const SoftIspStats &s)
++    {
++        if (s.count < MIN_SAMPLES || s.sumR == 0 || s.sumB == 0 || s.sumG == 0) {
++            return;
++        }
++        double r = static_cast<double>(s.sumG) / s.sumR;
++        double b = static_cast<double>(s.sumG) / s.sumB;
++        r = std::clamp(r, 0.5, 4.0);
++        b = std::clamp(b, 0.5, 4.0);
++        gainR = gainR * (1 - AWB_SPEED) + r * AWB_SPEED;
++        gainB = gainB * (1 - AWB_SPEED) + b * AWB_SPEED;
++    }
++
++    // Returns true when exposure changed. The mean is taken after white balance, before the
++    // digital gain; clipped samples count as white.
++    bool UpdateAe(const SoftIspStats &s)
++    {
++        double total = static_cast<double>(s.countY) + s.saturated;
++        if (total < MIN_SAMPLES) {
++            return false;
++        }
++        double luma = (static_cast<double>(s.sumY) / SoftIsp::LIN_MAX + s.saturated) / total;
++        double measured = std::max(luma * exposure.dgain, 1e-4);
++        double ratio = std::clamp(target / measured, 0.25, 4.0);
++        if (std::fabs(std::log(ratio)) < std::log(DEAD_BAND)) {
++            return false;
++        }
++        ratio = std::pow(ratio, DAMPING);
++        double want = exposure.lines * exposure.again * exposure.dgain * ratio;
++        Exposure e;
++        if (limits.sensorControl) {
++            e.lines = std::clamp(want, limits.minLines, limits.maxLines);
++            e.again = std::clamp(want / e.lines, 1.0, limits.maxAgain);
++            e.dgain = std::clamp(want / (e.lines * e.again), limits.minDgain, limits.maxDgain);
++        } else {
++            e.lines = exposure.lines;
++            e.again = exposure.again;
++            e.dgain = std::clamp(want / (e.lines * e.again), limits.minDgain, limits.maxDgain);
++        }
++        exposure = e;
++        return true;
++    }
++
++private:
++    static constexpr uint32_t MIN_SAMPLES = 64;
++    static constexpr double AWB_SPEED = 0.2;
++    static constexpr double DEAD_BAND = 1.08;
++    static constexpr double DAMPING = 0.6;
++};
++} // namespace OHOS::Camera
++#endif // HOS_CAMERA_CAMSS_SOFT_ISP_H
+diff --git a/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/src/v4l2_buffer.cpp b/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/src/v4l2_buffer.cpp
+index 65be2327b0f7cfedf5ec8adf1fc4b5712f15f87a..2cfbee60869996ebe0e804249153d05bebfd590b 100644
+--- a/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/src/v4l2_buffer.cpp
++++ b/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/src/v4l2_buffer.cpp
+@@ -25,6 +25,7 @@
+ #include "securec.h"
+ #include "v4l2_buffer.h"
+ #include "camera_dump.h"
++#include "camss_raw.h"
+ #define NOLOG
+ #include "TimeOutExecutor.h"
+ 
+@@ -321,7 +322,16 @@ RetCode HosV4L2Buffers::V4L2DequeueBuffer(int fd)
+         return RC_ERROR;
+     }
+ #endif
+-    if (memoryType_ == V4L2_MEMORY_MMAP || memoryType_ == V4L2_MEMORY_DMABUF) {
++    if ((memoryType_ == V4L2_MEMORY_MMAP || memoryType_ == V4L2_MEMORY_DMABUF) &&
++        adapterBufferMap_[buf.index].userBufPtr && adapterBufferMap_[buf.index].start && CamssRaw::IsRaw(fd)) {
++        // raw Bayer node: convert (demosaic, white balance, gamma, scale) into the pipeline buffer instead of
++        // copying; the raw frame is usually larger than that buffer, so the length check below does not apply
++        uint32_t used = (bufferType_ == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) ? buf.m.planes[0].bytesused : buf.bytesused;
++        if (!CamssRaw::Convert(fd, adapterBufferMap_[buf.index].start, used,
++            adapterBufferMap_[buf.index].userBufPtr, buffLong_)) {
++            adapterBufferMap_[buf.index].cameraBuffer->SetBufferStatus(CAMERA_BUFFER_STATUS_INVALID);
++        }
++    } else if (memoryType_ == V4L2_MEMORY_MMAP || memoryType_ == V4L2_MEMORY_DMABUF) {
+         if (adapterBufferMap_[buf.index].userBufPtr && adapterBufferMap_[buf.index].start) {
+             if (adapterBufferMap_[buf.index].length > buffLong_) {
+                 CAMERA_LOGE("ERROR: BufferMap length error");
+diff --git a/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/src/v4l2_dev.cpp b/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/src/v4l2_dev.cpp
+index f77b7d73a99f144fe99678394ad69b9bace77e12..e1d8c1cdb1354ba67bb34927e65625222e8b9651 100644
+--- a/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/src/v4l2_dev.cpp
++++ b/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/src/v4l2_dev.cpp
+@@ -54,6 +54,11 @@ RetCode HosV4L2Dev::start(const std::string& cameraID)
+     }
+ 
+     auto itr = HosV4L2Dev::deviceMatch.find(cameraID);
++    if (itr == HosV4L2Dev::deviceMatch.end()) {
++        // the capture node may have appeared after Init (late driver probe): look once more
++        myFileFormat_->V4L2MatchDevice(std::vector<std::string>{cameraID});
++        itr = HosV4L2Dev::deviceMatch.find(cameraID);
++    }
+     if (itr == HosV4L2Dev::deviceMatch.end()) {
+         CAMERA_LOGE("error:find V4L2 devname fail\n");
+         return RC_ERROR;
+diff --git a/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/src/v4l2_fileformat.cpp b/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/src/v4l2_fileformat.cpp
+index 6a46f7e9daf18da34319bc2ec75a7ca0b69d38e4..d4ae0c939ac2675d6a9deb6bb622a965808603b1 100644
+--- a/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/src/v4l2_fileformat.cpp
++++ b/camera/vdi_base/common/adapter/platform/v4l2/src/driver_adapter/src/v4l2_fileformat.cpp
+@@ -16,6 +16,7 @@
+ #include "v4l2_fileformat.h"
+ #include "securec.h"
+ #include "v4l2_dev.h"
++#include "camss_raw.h"
+ 
+ namespace OHOS::Camera {
+ HosFileFormat::HosFileFormat() {}
+@@ -133,12 +134,18 @@ RetCode HosFileFormat::V4L2GetCapability(int fd, const std::string& devName, con
+         return RC_ERROR;
+     }
+ 
+-    if (cameraId != std::string(reinterpret_cast<char*>(cap.driver))) {
+-        return RC_ERROR;
++    std::string matchName = std::string(reinterpret_cast<char*>(cap.driver));
++    if (cameraId != matchName) {
++        // raw capture nodes (e.g. Qualcomm CAMSS RDI, driver "qcom-camss" on every node) are matched by
++        // node name through /vendor/etc/camera/camss_raw.cfg instead of by driver name
++        if (!CamssRaw::MatchNode(devName, cameraId)) {
++            return RC_ERROR;
++        }
++        matchName = cameraId;
+     }
+ 
+     std::lock_guard<std::mutex> l(HosV4L2Dev::deviceFdLock_);
+-    HosV4L2Dev::deviceMatch.insert(std::make_pair(std::string(reinterpret_cast<char*>(cap.driver)), devName));
++    HosV4L2Dev::deviceMatch.insert(std::make_pair(matchName, devName));
+ 
+     CAMERA_LOGI("v4l2 driver name = %{public}s\n", cap.driver);
+     CAMERA_LOGD("v4l2 capabilities = 0x%{public}x\n", cap.capabilities);
+@@ -195,6 +202,14 @@ RetCode HosFileFormat::V4L2SetFmt(int fd, DeviceFormat& format)
+     }
+     fmt.type = bufType_;
+ 
++    bool rawOk = false;
++    if (CamssRaw::SetFormat(fd, bufType_, format.fmtdesc.width, format.fmtdesc.height, format.fmtdesc.pixelformat,
++        rawOk)) {
++        // raw node: the device runs its configured Bayer format; frames are converted to the requested size
++        // (I420) at dequeue time, see V4L2DequeueBuffer
++        return rawOk ? RC_OK : RC_ERROR;
++    }
++
+     if (bufType_ == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
+         fmt.fmt.pix_mp.pixelformat = format.fmtdesc.pixelformat;
+         fmt.fmt.pix_mp.width = format.fmtdesc.width;
+@@ -330,6 +345,7 @@ int HosFileFormat::V4L2OpenDevice(const std::string& deviceName)
+ 
+ void HosFileFormat::V4L2CloseDevice(int fd)
+ {
++    CamssRaw::Release(fd);
+     fdsan_close_with_tag(fd, fdsan_create_owner_tag(FDSAN_OWNER_TYPE_FILE, LOG_DOMAIN));
+ }
+ 
+diff --git a/camera/vdi_base/usb_camera/pipeline_core/src/node/node_utils.cpp b/camera/vdi_base/usb_camera/pipeline_core/src/node/node_utils.cpp
+index 2fcdb2852df31d4e42aaa3bae41e8019cfd97ec7..86e4d146921261ca00a17358788e9b5e7b8b8971 100644
+--- a/camera/vdi_base/usb_camera/pipeline_core/src/node/node_utils.cpp
++++ b/camera/vdi_base/usb_camera/pipeline_core/src/node/node_utils.cpp
+@@ -38,6 +38,8 @@ static enum AVPixelFormat ConvertOhosFormat2AVPixelFormat(uint32_t format)
+         {CAMERA_FORMAT_YCRCB_420_SP, AV_PIX_FMT_NV21},
+         {CAMERA_FORMAT_YCBCR_420_SP, AV_PIX_FMT_NV12},
+         {CAMERA_FORMAT_YUYV_422_PKG, AV_PIX_FMT_YUYV422},
++        // what the common v4l2_source/uvc nodes deliver: planar Y, Cb, Cr (I420, V4L2_PIX_FMT_YUV420)
++        {CAMERA_FORMAT_YCRCB_420_P,  AV_PIX_FMT_YUV420P},
+     };
+     auto it = ohosFormat2AVPixelFormatMap.find(format);
+     if (it != ohosFormat2AVPixelFormatMap.end()) {
