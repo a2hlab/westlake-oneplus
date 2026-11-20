@@ -4,6 +4,7 @@
 printk ring written with the kernel's reserve/wrap/reuse rules, per-CPU printk-safe buffers), together with a
 matching System.map, runs `kmsg-file` on it and compares the decoded log with what was written. Two cases: the
 static ring inside the kernel image, and a log_buf_len= ring in the linear map below a negative memstart_addr.
+Also TrustZone's diagnostic area and the AOP's log, from OCIMEM and AOP data RAM regions written the same way.
 
   python3 scripts/test_crashdump.py [WORKDIR]"""
 import json
@@ -160,9 +161,73 @@ def build(work, dynamic):
     return [(seq, body) for seq, body in msgs if seq in alive], safe, phys, kaslr
 
 
+def check_tz(work):
+    """TrustZone's diagnostic area and the AOP's log, as a capture reads them from the phone's OCIMEM and AOP data
+    RAM regions, and as the tzdiag command decodes the saved copies (finding DATARAM and the offset by itself)."""
+    import argparse
+    sys.path.insert(0, HERE)
+    import crashdump
+    hz, offset = 19.2e6, 4.5
+    oci = bytearray(0x20000)
+    h, boot, rst, intoff, ring = 0x13000, 0x40, 0x180, 0x200, 0x1200
+    log = b''.join(b'[%016x](%s)' % (int(t * hz), a) for t, a in ((9.0, b'b'), (7.0, b'a')))
+    struct.pack_into('<10I', oci, h, 0x747a6461, 0x90001, 8, 0, boot, rst, intoff, ring, len(log), 0)
+    for c in range(8):
+        struct.pack_into('<6IQI', oci, h + boot + c * 40, 10 + c, 10 + c, 9, 0, 9, 0, 0, 0)
+    struct.pack_into('<II', oci, h + rst + 2 * 8, 0x33, 1)
+    struct.pack_into('<I', oci, h + intoff - 4, 2)
+    for i, (num, name, counts) in enumerate(((186, b'NOCERR', (1, 0, 0, 0, 0, 2, 0, 0)), (33, b'NSWDogB', (0,) * 8))):
+        struct.pack_into('<HBBI16s8I', oci, h + intoff + i * 56, 0, 1, 0, num, name, *counts)
+    oci[h + ring:h + ring + len(log)] = log
+    dram = bytearray(0x8000)
+    dram[0x100:0x10c] = b'AOP DDR Log\0'
+    struct.pack_into('<II', dram, 0x100 + 28, 0xe0000 + 0x4000, 3 * 32)
+    for k, (t, ev) in enumerate(((12.0, 0x13e), (11.0, 0x12c), (0, 0))):
+        struct.pack_into('<IQ5I', dram, 0x4000 + k * 32, 0, int(t * hz), ev, 1, 2, 3, 4)
+
+    class Mem:
+        bytes_read = 0
+
+        def read(self, addr, size):
+            return bytes({0x14680000: oci, 0xb0e0000: dram, 0xc264000: b'\x01\0\0\0'}[addr][:size])
+
+    out = os.path.join(work, 'tz')
+    rows = [(0xc264000, 4, 'reset status', 'RST_STAT.BIN'), (0x14680000, len(oci), 'OCIMEM', 'OCIMEM.BIN'),
+            (0xb0e0000, len(dram), 'AOP Data RAM region', 'DATARAM.BIN')]
+    cap = crashdump.Capture(Mem(), out, argparse.Namespace(budget=60), rows)
+    cap.counter = offset
+    first = cap.regions(('RST_STAT', 'OCIMEM', 'DATARAM'))
+    cap.tzdiag()
+    again = cap.regions(None)
+    text = open(os.path.join(out, 'ram', 'tzdiag.txt')).read()
+    os.makedirs(os.path.join(out, 'ram', 'printk'), exist_ok=True)
+    json.dump({'counter_minus_kernel_s': offset}, open(os.path.join(out, 'ram', 'printk', 'layout.json'), 'w'))
+    run = subprocess.run([sys.executable, os.path.join(HERE, 'crashdump.py'), 'tzdiag',
+                          os.path.join(out, 'ram', 'regions', 'OCIMEM.BIN')], capture_output=True, text=True)
+    want = ['system counter time - kernel time: 4.500000 s', '  cpu2 type 0x33 count 1',
+            '  186  NOCERR                1      0      0      0      0      2      0      0   <-- fired',
+            '  cpu3 wb 13/13 pc 9/0 psci 9/0 jump 0x0', '      7.000000 s  kernel     2.500000  (a)',
+            'AOP log (2 entries at data RAM +0x4000; system counter time, then kernel time):',
+            '     11.000000 s  kernel     6.500000  ev 0x12c  1 2 3 4']
+    problems = ['missing: %r' % w for w in want if w not in text.splitlines()]
+    if text.index('(a)') > text.index('(b)') or text.index('ev 0x12c') > text.index('ev 0x13e'):
+        problems.append('logs not in time order')
+    if (first, again) != (3, 0):
+        problems.append('regions read %s then %s, expected 3 then 0' % (first, again))
+    if run.stdout != text:
+        problems.append('tzdiag on the saved regions differs from the capture: %s' % (run.stderr or run.stdout)[-500:])
+    if not any('fired' in l for l in cap.summary):
+        problems.append('no fired interrupt in the summary')
+    if problems:
+        print('FAIL TrustZone and AOP diagnostics:\n  ' + '\n  '.join(problems))
+        return 1
+    print('ok   TrustZone and AOP diagnostics: interrupts, resets, both logs in kernel time')
+    return 0
+
+
 def main():
     work = sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix='crashdump-test-')
-    failures = 0
+    failures = check_tz(work)
     for dynamic in (False, True):
         d = os.path.join(work, 'dynamic' if dynamic else 'static')
         os.makedirs(d, exist_ok=True)

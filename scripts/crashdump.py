@@ -7,13 +7,18 @@ This reads what the kernel left in RAM, which is gone after a restart, and reset
                   and write the console log, oldest line first, to OUTDIR/console.txt
   kmsg OUTDIR --system-map MAP [--kernel IMAGE] [--offsets JSON] [--budget SECONDS] [--base ADDR] [--no-image]
                   find the running kernel in RAM and read its own log buffer: every message, whatever the
-                  console loglevel (OUTDIR/dmesg-ram.txt); then, in OUTDIR/ram/, the reset-reason regions, the
-                  tasks and run queues with stacks (needs --offsets), the other small regions and the kernel image
+                  console loglevel (OUTDIR/dmesg-ram.txt); then, in OUTDIR/ram/, the reset-reason regions,
+                  TrustZone's and the AOP's diagnostics (tzdiag.txt), the tasks and run queues with stacks (needs
+                  --offsets), the other small regions and the kernel image; summary.txt has the main findings
   kmsg-file OUTDIR --ram ADDR=FILE [--ram ...] --system-map MAP [...]
                   the same from RAM images on disk (a full RAM dump, tests)
   offsets VMLINUX print the structure offsets that 'kmsg' needs, as JSON (from vmlinux's DWARF; needs pahole)
-  tzdiag FILE     decode TrustZone's diagnostic area from a saved OCIMEM region (OCIMEM.BIN): per-CPU reset
-                  entries, interrupt counts (non-secure watchdog bite, NOC errors, XPU violations) and TZ's log
+  tzdiag FILE [--aop DATARAM] [--offset SECONDS]
+                  decode TrustZone's diagnostic area from a saved OCIMEM region (OCIMEM.BIN): per-CPU boot and
+                  reset entries, interrupt counts (non-secure watchdog bite, NOC errors, XPU violations) and TZ's
+                  log; with the AOP's data RAM (DATARAM.BIN) the AOP's log too. Their times are the system counter's;
+                  with the counter's offset to the kernel clock (kmsg reads it: summary.txt, printk/layout.json) also
+                  the kernel's. In a kmsg capture's ram/regions/ both are found by themselves
   table           list the memory regions the phone offers
   reset           restart the phone (it boots its default slot)
 
@@ -578,15 +583,31 @@ class Kernel:
 # ---------------------------------------------------------------------------------------------------- TZ diag
 
 
-def tz_diag(b):
+COUNTER_HZ = 19.2e6           # the system counter (QTimer): TrustZone's and the AOP's log times, from power-on
+AOP_DATARAM = 0xe0000         # where the AOP sees its data RAM (the DATARAM.BIN region)
+
+
+def tz_diag(b, dataram=None, offset=None):
     """TrustZone's diagnostic area (struct tzdbg_t, magic 'adzt', as the msm tz_log driver reads it) in a copy of
-    OCIMEM -> text. Interrupt counts are per CPU since TZ started; SWDogBa (TZ's own watchdog bark) is routine."""
+    OCIMEM -> text; with a copy of the AOP's data RAM (DATARAM), the AOP's log too. Their times are the system
+    counter's; with offset (counter time - kernel time in seconds, from the kernel's sched_clock epoch: the capture
+    summary's), each also in the kernel's clock. Interrupt counts are per CPU since TZ started; SWDogBa (TZ's own
+    watchdog bark) is routine."""
+    kt = (lambda t: '  kernel %12.6f' % (t / COUNTER_HZ - offset)) if offset is not None else (lambda t: '')
+    out = ['system counter time - kernel time: %.6f s' % offset] if offset is not None else []
     h = b.find(b'adzt')
     if h < 0:
-        return 'no TZ diagnostic area (magic adzt) in this region\n'
+        out.append('no TZ diagnostic area (magic adzt) in this region')
+        return '\n'.join(out + aop_log(dataram, kt)) + '\n'
     magic, ver, cpus, vmid, boot, rst, intoff, ring, ringlen, wake = struct.unpack_from('<10I', b, h)
     cpus = min(cpus, 8)
-    out = ['tzdbg at +%#x: version %#x, %d CPUs' % (h, ver, cpus), 'reset entries (per CPU: type, count):']
+    out += ['tzdbg at +%#x: version %#x, %d CPUs' % (h, ver, cpus),
+            'boot entries (per CPU): warm boot entry/exit, power collapse entry/exit, PSCI entry/exit, last warm jump']
+    for c in range(cpus):
+        if h + boot + c * 40 + 36 <= len(b):
+            out.append('  cpu%d wb %d/%d pc %d/%d psci %d/%d jump %#x' % (
+                (c,) + struct.unpack_from('<6IQI', b, h + boot + c * 40)[:7]))
+    out.append('reset entries (per CPU: type, count):')
     for c in range(cpus):
         out.append('  cpu%d type %#x count %d' % ((c,) + struct.unpack_from('<II', b, h + rst + c * 8)))
     n = struct.unpack_from('<I', b, h + intoff - 4)[0]
@@ -604,11 +625,29 @@ def tz_diag(b):
         if name:
             out.append('  %-4d %-16s %s%s' % (num, name, ' '.join('%6d' % x for x in counts), note))
     log = b[h + ring:h + ring + ringlen]
-    out.append('log (timestamps: QTimer, 19.2 MHz, from power-on; the kernel clock starts a few seconds later):')
     entries = sorted((int(m.group(1), 16), m.group(2).decode(errors='replace'))   # a ring: sort by time
                      for m in re.finditer(rb'\[([0-9a-f]{16})\]\(([^)]*)\)', log))
-    out += ['  %12.6f s  (%s)' % (ticks / 19.2e6, args) for ticks, args in entries]
-    return '\n'.join(out) + '\n'
+    out.append('TZ log (%d entries; system counter time from power-on%s):' % (
+        len(entries), ', then kernel time' if offset is not None else '; the kernel clock starts a few seconds later'))
+    out += ['  %12.6f s%s  (%s)' % (ticks / COUNTER_HZ, kt(ticks), args) for ticks, args in entries]
+    return '\n'.join(out + aop_log(dataram, kt)) + '\n'
+
+
+def aop_log(a, kt):
+    """The AOP's event log in a copy of its data RAM: a descriptor named 'AOP DDR Log' gives the ring's address (as
+    the AOP sees it) and size; 32-byte entries, each with a counter time stamp."""
+    i = a.find(b'AOP DDR Log\0') if a else -1
+    while 0 <= i and i + 36 <= len(a):
+        addr, size = struct.unpack_from('<II', a, i + 28)
+        off = addr - AOP_DATARAM
+        if 0 <= off and off + size <= len(a) and 0 < size <= 0x10000:
+            ev = sorted(e[1:] for e in (struct.unpack_from('<IQ5I', a, o) for o in range(off, off + size - 31, 32))
+                        if e[1])
+            return ['AOP log (%d entries at data RAM +%#x; system counter time%s):' % (
+                len(ev), off, ', then kernel time' if kt(0) else '')] + [
+                '  %12.6f s%s  ev %#x  %d %d %d %d' % ((ts / COUNTER_HZ, kt(ts)) + tuple(rest)) for ts, *rest in ev]
+        i = a.find(b'AOP DDR Log\0', i + 1)
+    return ['no AOP log in the data RAM copy'] if a else []
 
 
 # ---------------------------------------------------------------------------------------------------- tasks
@@ -834,6 +873,9 @@ class Capture:
         self.logf = open(os.path.join(self.ram, 'capture.log'), 'a')
         self.summary = []
         self.k = None
+        self.counter = None        # system counter time - kernel time (s), once the printk step has read it
+        self.saved = set()         # regions read so far
+        self.tz = {}               # OCIMEM and DATARAM copies, for tzdiag.txt
 
     def log(self, msg):
         line = '%6.1fs %s' % (time.time() - self.start, msg)
@@ -878,8 +920,9 @@ class Capture:
             result['kaslr'] = '%#x' % k.kaslr
             result.update(self.step('printk ring', self.printk) or {})
             self.step('printk-safe buffers', self.printk_safe)
-        self.step('reset-reason regions', lambda: self.regions(('RST_STAT', 'PMIC_PON', 'FSM_STS', 'FSM_CTRL',
-                                                                'PMON_HIS', 'LOAD.CMM')))
+        self.step('reset-reason and TrustZone regions', lambda: self.regions(
+            ('RST_STAT', 'PMIC_PON', 'FSM_STS', 'FSM_CTRL', 'PMON_HIS', 'LOAD.CMM', 'OCIMEM', 'DATARAM')))
+        self.step('TrustZone diagnostics', self.tzdiag)
         if base is not None and offsets:
             result.update(self.step('tasks', self.tasks) or {})
         elif base is not None:
@@ -902,7 +945,7 @@ class Capture:
         self.write('printk/infos.bin', infos)
         self.write('printk/text.bin', data)
         try:
-            counter = k.counter_offset()
+            counter = self.counter = k.counter_offset()
         except (Refused, struct.error):
             counter = None
         layout.update(kernel_base=k.base, kaslr=k.kaslr, kimage_voffset=k.voffset, memstart_addr=k.memstart,
@@ -966,7 +1009,7 @@ class Capture:
             key = name.upper().split('.')[0]
             if only is not None and key not in only and name.upper() not in only:
                 continue
-            if only is None and key in ('RST_STAT', 'PMIC_PON', 'FSM_STS', 'FSM_CTRL', 'PMON_HIS', 'LOAD'):
+            if (base, name) in self.saved:
                 continue
             if time.time() > self.deadline:
                 self.log('regions: out of time')
@@ -978,14 +1021,21 @@ class Capture:
                 self.log('region %s: %s' % (name, e))
                 continue
             self.write('regions/' + safe, data)
+            self.saved.add((base, name))
             done += 1
-            if key == 'OCIMEM':
-                text = tz_diag(data)
-                self.write('tzdiag.txt', text)
-                self.summary += [l for l in text.splitlines() if 'fired' in l or re.search(r'type 0x[1-9a-f]', l)]
+            if key in ('OCIMEM', 'DATARAM'):
+                self.tz[key] = data
             if length <= 16:
                 self.summary.append('%s (%s) @%#x: %s' % (name, desc, base, data.hex()))
         return done
+
+    def tzdiag(self):
+        if 'OCIMEM' not in self.tz:
+            self.log('TrustZone diagnostics: no OCIMEM region read')
+            return
+        text = tz_diag(self.tz['OCIMEM'], self.tz.get('DATARAM'), self.counter)
+        self.write('tzdiag.txt', text)
+        self.summary += [l for l in text.splitlines() if 'fired' in l or re.search(r'type 0x[1-9a-f]', l)] + ['']
 
     def tasks(self):
         k, a = self.k, self.args
@@ -1094,9 +1144,21 @@ def main():
         sys.exit(__doc__)
     action = sys.argv[1]
     if action == 'tzdiag':
-        if len(sys.argv) != 3:
-            sys.exit(__doc__)
-        sys.stdout.write(tz_diag(open(sys.argv[2], 'rb').read()))
+        p = argparse.ArgumentParser(prog='crashdump.py tzdiag')
+        p.add_argument('ocimem', help='a saved OCIMEM region (in a kmsg capture: ram/regions/OCIMEM.BIN)')
+        p.add_argument('--aop', help="a saved copy of the AOP's data RAM (default: DATARAM.BIN beside OCIMEM)")
+        p.add_argument('--offset', type=float, help='system counter time - kernel time, in seconds (default: '
+                       "counter_minus_kernel_s of the capture's ram/printk/layout.json)")
+        a = p.parse_args(sys.argv[2:])
+        d = os.path.dirname(os.path.abspath(a.ocimem))
+        aop = a.aop or (os.path.join(d, 'DATARAM.BIN') if os.path.exists(os.path.join(d, 'DATARAM.BIN')) else None)
+        offset = a.offset
+        if offset is None:
+            try:
+                offset = json.load(open(os.path.join(d, '..', 'printk', 'layout.json'))).get('counter_minus_kernel_s')
+            except (OSError, ValueError):
+                pass
+        sys.stdout.write(tz_diag(open(a.ocimem, 'rb').read(), open(aop, 'rb').read() if aop else None, offset))
         return
     if action == 'offsets':
         if len(sys.argv) != 3:
