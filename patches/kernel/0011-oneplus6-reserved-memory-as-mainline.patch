@@ -1,0 +1,46 @@
+OnePlus 6/6T reserved memory as in mainline: this port's device tree (5.10) gave the kernel memory that the
+firmware protects.
+
+- removed_region: 2 MB at 0x88f00000 here, 28 MB in mainline (+0x1c00000, up to qseecom at 0x8ab00000)
+- the 4 KiB guard pages on each side of rmtfs: mainline reserves 0xf5b00000 + 0x202000 with qcom,use-guard-pages,
+  which this kernel's rmtfs driver lacks, so they are separate no-map regions here (rmtfs itself unchanged)
+- cont_splash_mem: the bootloader's framebuffer at 0x9d400000 (36 MB), as mainline
+
+The 26 MB at 0x89100000-0x8aafffff is firmware-protected: one 4-byte read of 0x89100000 through the kernel's linear
+map froze the SoC into crash-dump mode. Handed to the page allocator, those pages hung the phone whenever memory
+pressure reached them: storage I/O filling the page cache, tmpfs, large app launches, boot. A memory stress (tmpfs
+fills) or a storage stress (tar + extract + fsync'd writes on /data) hung the old map within 30-40 s and every hang
+of a 1000-app round on 2026-11-19 was this. With this map, the memory stress ran 10 minutes (193 fills of 4 GB) and
+the storage stress 15 minutes without a hang.
+
+--- a/arch/arm64/boot/dts/qcom/sdm845-oneplus-common.dtsi
++++ b/arch/arm64/boot/dts/qcom/sdm845-oneplus-common.dtsi
+@@ -46,7 +46,27 @@
+ 		 */
+ 		removed_region: memory@88f00000 {
+ 			no-map;
+-			reg = <0 0x88f00000 0 0x200000>;
++			reg = <0 0x88f00000 0 0x1c00000>;	/* to qseecom at 0x8ab00000, as mainline */
++		};
++
++		/*
++		 * The firmware protects one 4 KiB page on each side of rmtfs as well (mainline reserves
++		 * 0xf5b00000 + 0x202000 with qcom,use-guard-pages, which this kernel's rmtfs driver lacks).
++		 */
++		rmtfs_guard_lo: memory@f5b00000 {
++			no-map;
++			reg = <0 0xf5b00000 0 0x1000>;
++		};
++
++		rmtfs_guard_hi: memory@f5d01000 {
++			no-map;
++			reg = <0 0xf5d01000 0 0x1000>;
++		};
++
++		/* the bootloader's framebuffer, scanned out until the display driver takes over (as mainline) */
++		cont_splash_mem: memory@9d400000 {
++			no-map;
++			reg = <0 0x9d400000 0 0x2400000>;
+ 		};
+ 
+ 		ramoops: ramoops@ac300000 {

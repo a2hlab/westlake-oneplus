@@ -21,6 +21,7 @@ RAM-booted from the PC (`fastboot boot`), so the boot partitions are never flash
 | Bluetooth | no: the Bluetooth driver host needs a vendor `libbt_vendor.z.so`, which the port does not have |
 | audio | no: the kernel has no sound card |
 | power key: display off and on | yes, with the kernel kept out of suspend: its suspend (s2idle) drops USB and loops; built into images after `v6.1.0.31-r2`, a one-line step on r2 (known limitations) |
+| memory pressure (large apps, long runs, sustained storage writes) | yes with kernel `0011` (2026-11-19): the port's device tree gave the kernel 26 MB of firmware-protected memory (0x89100000-0x8aafffff), and the phone hung into crash-dump mode whenever memory pressure reached it. Found and checked with OH 7.0, which runs the same kernel and device tree ([the record](https://github.com/a2hlab/westlake-oneplus/blob/oh-7.0/docs/hang-2026-11-19.md)); images up to release `v6.1.0.31-r2` predate it (known limitations) |
 | modem, camera, sensors | not checked yet |
 
 How this was verified (2026-11-17):
@@ -49,6 +50,9 @@ Known limitations:
 - Avoid Android system updates while you use OH: A/B updates (e.g. LineageOS) install to the inactive slot B,
   which replaces OH and leaves Android on slot B, where `10-install.sh` will not install.
 - The device reports itself as "Oneplus 6T" / model "Fajita" (strings of the port it is based on).
+- The images of releases up to `v6.1.0.31-r2` predate kernel `0011` (the memory map): under memory pressure (large
+  apps, long runs) they can hang into crash-dump mode, where the phone waits for a forced restart (Power ~10-15 s).
+  Images built from this branch have it.
 - The kernel never suspends. Its suspend (s2idle) disconnects USB, and with it hdc, and it loops: the modem
   (`1e40000.ipa`) wakes the kernel every few seconds and OH suspends it again, so after the power key the screen did
   not stay on. The board's `init.fajita.cfg` holds the kernel wake lock `no_suspend` from boot, which OH's suspend
@@ -140,6 +144,7 @@ flash rewrite `system_b`/`vendor_b`.
 | [`device/soc/qualcomm`](patches/oh/device/soc/qualcomm) | the display HDI libraries wait for the IDL headers they include (v1.1-v1.3); without it a clean build can fail with `'v1_2/display_composer_type.h' file not found` |
 | [`kernel/0001`](patches/kernel/0001-shmem-user-xattrs.patch) | `user.*` xattrs on tmpfs (upstream since 6.6): OH's databases set `user.security`; without it no app installs and the phone sits on the boot animation |
 | [`kernel/0002`, `0003`](patches/kernel) | OnePlus 6 msm-id/board-id in the DTB; ramoops without ECC (bring-up leftovers) |
+| [`kernel/0011`](patches/kernel/0011-oneplus6-reserved-memory-as-mainline.patch) | the OnePlus 6 reserved-memory map of mainline: the full removed region (28 MB at 0x88f00000, not 2 MB), the rmtfs guard pages and the bootloader's splash framebuffer; the missing 26 MB is firmware-protected and hung the phone under memory pressure (the `oh-7.0` branch's patch of the same number; the numbers between are that branch's) |
 | [`kernel/oneplus6.config`](patches/kernel/oneplus6.config) | Terminus 16x32 console font for the on-screen boot log |
 | [`build`](patches/oh/build), [`arkcompiler/ets_runtime`](patches/oh/arkcompiler/ets_runtime) | host tools vs GCC 13 headers (Ubuntu 24.04) |
 | [`third_party/jsframework`](patches/oh/third_party/jsframework), [`third_party/libnl`](patches/oh/third_party/libnl) | Node 14 for one tool while the build uses Node 18; autoconf 2.72 |
