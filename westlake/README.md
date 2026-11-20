@@ -191,3 +191,38 @@ from `BASE`, a `round_score.py --json` output or a D600 round's scores).
 `tools/hdc-profile.py TIMING_LOG round-TAG.log` then says where each app's turn went: its hdc calls by kind (shell,
 file send, file recv), the time between them (host-side work and waits), and the longest calls and gaps.
 
+
+### Two phones
+
+A round can be shared by two phones running the same OH build, each taking a part of the apps (2026-11-20: 127
+apps left of the Hong Kong round, 64 and 63, about half the time). Each phone needs its own hdc serial first: every
+phone on these images gets the same one (branch `oh-7.0`, `docs/second-phone.md`).
+
+Each phone gets a settings file for `WL_ENV`. For the second one, besides the 7.0 settings the first one uses:
+
+```sh
+HDC_TARGET=<its hdc serial>
+WL_OUT=<its own output directory>    # 04-framework.sh writes the device report the round reads into it
+WL_ROUND=<its own round directory>   # its staged apps, logs and installed-bundle record (.installed)
+RECOVER=none                         # see below
+```
+
+1. `01-phone-runtime.sh` and `02-bridge.sh` are per OH build, so with the same build a copy of the first phone's
+   `WL_OUT` serves (without its test launches, `managed-*` and `launch-*`). Then, with the second phone's settings:
+   `03-prep.sh`, `04-framework.sh`, and `07-round.sh --setup` for its round directory.
+2. `07-round.sh` makes its list of apps when it starts and skips only the apps that already have a line in its own
+   `results.tsv`, so the phones get separate lists: what is left of `apps.csv` (not marked missing in
+   `sources.csv`, no line in the first round's `results.tsv`), in order, the first half in one `LIST` file and the
+   rest in another. A runner that is already going keeps its list until it starts again: stop its supervisor's
+   process group and start it with its `LIST` (the app it was running is launched again).
+3. Start each phone's supervisor with its settings and its list:
+   `WL_ENV=<its settings> LIST=<its list> setsid nohup tools/supervise-round.sh TAG >/dev/null 2>&1 &`.
+   A phone in crash-dump mode cannot be told from the other one (both are the same Qualcomm device), so only the
+   first phone's supervisor resets phones; the second one's (`RECOVER=none`) waits for its phone to come back and
+   then runs `03` and `04` again. A `kmsg-watch.sh` per phone (`WL_ENV`) keeps each phone's kernel log in its own
+   round directory.
+4. Finish from the first phone's settings: `MERGE_FROM=<the second round directory> tools/finish-round.sh TAG BASE`
+   (without `LIST`). Every supervisor of round TAG counts, so it waits for both phones; then `merge-round.sh`
+   appends the second phone's `results.tsv` lines and copies its per-app logs for the apps the first round has no
+   line for, a completion pass on the first phone launches whatever neither phone reached, and the retry pass and
+   the report run on the merged round as for one phone.
