@@ -1,0 +1,30 @@
+access_tokenid: answer foreign ioctls (terminal probes) with ENOTTY and without a log line. Services and apps
+call isatty()/TIOCGWINSZ (ioctl type 'T', 84) on their /dev/access_token_id descriptor many times a second (in
+one 10-minute kernel log of the phone: 1761 of 4465 messages, from OH's time_service and telephony_sa among
+others). Each was logged at error level ("access tokenid magic fail, TYPE=84"): at a console loglevel above 1
+the flood, drawn on the framebuffer console, froze the phone; at loglevel=1 it still fills the printk ring, which
+then covers only minutes before a hang. ENOTTY is what a file that is not a terminal answers.
+
+diff --git a/drivers/accesstokenid/access_tokenid.c b/drivers/accesstokenid/access_tokenid.c
+index a9340d471..b19b522fe 100644
+--- a/drivers/accesstokenid/access_tokenid.c
++++ b/drivers/accesstokenid/access_tokenid.c
+@@ -338,9 +338,15 @@ static long access_tokenid_ioctl(struct file *file, unsigned int cmd,
+ 	}
+ 
+ 	if (_IOC_TYPE(cmd) != ACCESS_TOKEN_ID_IOCTL_BASE) {
+-		pr_err("%s: access tokenid magic fail, TYPE=%d\n",
+-		       __func__, _IOC_TYPE(cmd));
+-		return -EINVAL;
++		/*
++		 * Not one of ours: typically a terminal probe (isatty(),
++		 * TIOCGWINSZ) on this descriptor, which some services and
++		 * app SDKs issue many times a second. Answer as a file that
++		 * is not a terminal does, without filling the kernel log.
++		 */
++		pr_debug_ratelimited("%s: ioctl type %d is not ours\n",
++				     __func__, _IOC_TYPE(cmd));
++		return -ENOTTY;
+ 	}
+ 
+ 	if (func_cmd >= ACCESS_TOKENID_MAX_NR) {
