@@ -14,13 +14,15 @@
 # WL_ENV=FILE: settings sourced (and exported) first, e.g. those of the 7.0 setup. Log: $WL_ROUND/supervise-TAG.log;
 # 07-round.sh's output goes to $WL_ROUND/TAG.out. Start it detached: setsid nohup supervise-round.sh TAG >/dev/null &
 # To stop a round: stop this script first (else it "recovers" the phone), then 07-round.sh.
+# RECOVER=none: never run recover-phone.sh, only wait for the phone to come back. With two phones (README, "Two
+# phones") a phone in crash-dump mode cannot be told from the other one, so only one phone's supervisor may reset it.
 set -uo pipefail
 [ -n "${WL_ENV:-}" ] && { set -a; . "$WL_ENV"; set +a; }
 . "$(dirname "$0")/../config.sh"
 wl_need WL_ROUND
 TAG=${1:?usage: $0 TAG [FIRST [LAST]]}; FIRST=${2:-1}; LAST=${3:-100000}
 R=$WL_ROUND; LOG=$R/supervise-$TAG.log; MAX_RESTARTS=${MAX_RESTARTS:-40}
-RECOVER=$WL_DIR/../scripts/recover-phone.sh
+RECOVER=${RECOVER:-$WL_DIR/../scripts/recover-phone.sh}
 say() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
 s() { timeout 90 "$WL_HDC" -t "$HDC_TARGET" shell "$@" </dev/null 2>&1 | tr -d '\r'; }
 booted() { [ "$(s 'param get bootevent.boot.completed' | tr -d '\n ')" = true ]; }
@@ -44,7 +46,7 @@ for n in $(seq 1 "$MAX_RESTARTS"); do
     say "$pkg: the second time the phone went while it ran: phone-hung"
   fi
   sleep 30
-  if bash "$RECOVER" --check; then
+  if [ "$RECOVER" != none ] && bash "$RECOVER" --check; then
     say "phone in crash-dump mode (running: ${pkg:-?}): recovering"
     bash "$RECOVER" >> "$LOG" 2>&1 || { say "recover-phone.sh failed (exit $?)"; continue; }
   else
