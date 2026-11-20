@@ -41,10 +41,12 @@ else
 fi
 
 step "audio and compute DSPs: no automatic restart"
-# 2026-11-19, round o70b: the audio DSP crashed ("remoteproc-adsp: fatal error received: SFR Init: wdog or kernel
-# error suspected") and the whole phone hung 7 ms into the kernel's restart of it (while it removed the DSP's fastrpc
-# devices), read back from the hung phone's RAM. Without the automatic restart a DSP crash leaves the phone running,
-# without sound until the next boot. The modem keeps its restart (Wi-Fi depends on it). Not kept across reboots.
+# 2026-11-19, round o70b: a hang read back from the phone's RAM ended while the kernel restarted the crashed audio DSP
+# ("remoteproc-adsp: fatal error received: SFR Init: wdog or kernel error suspected"). The restart did not cause that
+# hang (a bus error had begun before the DSP crashed, and the phone also hung with the restart off), but this 5.10
+# kernel's restart is not safe (its SLIMbus driver lacks the restart handling of later kernels). Without it a DSP
+# crash leaves the phone running, without sound until the next boot. The modem keeps its restart (Wi-Fi depends on
+# it). Not kept across reboots.
 wl_hdc shell 'for r in /sys/class/remoteproc/remoteproc*; do n=$(cat $r/name); case $n in *adsp*|*cdsp*)
     d=/sys/kernel/debug/remoteproc/${r##*/}/recovery; echo disabled > $d && echo "  $n: $(cat $d)" || echo "  $n: not changed";;
   esac; done' | tr -d '\r'

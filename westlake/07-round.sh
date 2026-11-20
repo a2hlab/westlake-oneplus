@@ -174,8 +174,8 @@ print(json.load(open(sys.argv[1]))["application"]["launch_activity"])' "$in/app-
   local r; r=$(dev "bm install -r -p /data/local/tmp/wl-round.hap; rm -f /data/local/tmp/wl-round.hap" | tail -1)
   case "$r" in *successfully*) ;; *) result "$pkg" install-failed "$r"; rm -f "$RS/.installed"; return ;; esac
   # The kernel's clock at the start: the app's evidence keeps the kernel log from here (GPU faults in render_service
-  # on this phone: round o70a's hang followed a string of them). After a hang, sahara.py in crash-dump mode reads the
-  # whole console log from the phone's RAM (ramoops).
+  # on this phone: round o70a's hang followed a string of them). After a hang, scripts/crashdump.py reads the
+  # kernel's own log from the phone's RAM in crash-dump mode (tools/supervise-round.sh: scripts/recover-phone.sh).
   local kstart; kstart=$(dev "cut -d' ' -f1 /proc/uptime" | grep -o '^[0-9.]*' | head -1)
   # The framework, hard-linked where the launcher looks for its shared copy; the launch mark for crash dumps.
   dev "S=/data/app/el2/100/base/$pkg/files/a2hlab-shared-${FWSTAGE##*/}; [ -f \$S/.a2hlab-shared-ready ] ||
