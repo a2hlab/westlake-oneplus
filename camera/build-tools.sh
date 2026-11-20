@@ -33,7 +33,7 @@ echo '#define PACKAGE_VERSION "v4l-utils-'${V4L_UTILS_COMMIT:0:12}'"' > "$OUT/ge
 # camss_setup: the boot-time graph setup of the OH camera patches (device/board/oneplus 0007), static, to try it
 # on a RAM-booted phone before images are built (host-camera-test.sh verify-setup)
 CS=$OH_ROOT/device/board/oneplus/fajita/camera/camss_setup/camss_setup.c
-[ -f "$CS" ] || die "$CS missing (03-apply-patches.sh with patches/oh/device/board/oneplus/0007)"
+[ -f "$CS" ] || die "$CS missing (STAGING=camera 03-apply-patches.sh: staged device/board/oneplus 0007)"
 "${CC[@]}" -Wall -Wextra "$CS" -o "$OUT/camss_setup"
 "$SDK/llvm/bin/llvm-strip" "$OUT/media-ctl" "$OUT/yavta" "$OUT/camss_setup"
 ls -l "$OUT/media-ctl" "$OUT/yavta" "$OUT/camss_setup"

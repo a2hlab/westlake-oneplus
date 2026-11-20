@@ -1,7 +1,8 @@
 # Cameras (OH 7.0 branch): kernel bring-up and on-phone test
 
-Status: the kernel side is written and built, **not yet run on a phone**. This page says what the patches
-do and how to test them without flashing anything.
+Status: the kernel side is written and built, **not yet run on a phone**. The patches are a staged topic,
+[`patches/staging/camera`](../patches/staging/camera), outside the default build: `STAGING=camera` applies and builds
+them. This page says what they do and how to test them without flashing anything.
 
 ## The hardware
 
@@ -20,24 +21,26 @@ CSIPHY -> CSID -> VFE "RDI" -> memory unchanged; demosaicing and exposure/white 
 The [sdm845-mainline](https://codeberg.org/sdm845/linux) tree (branch `sdm845-next`) runs all three cameras
 on mainline Linux: the D-PHY ones since early 2025, the IMX519 with a CAMSS C-PHY extension (in review
 upstream). The port's 5.10 kernel has CAMSS only for older SoCs (VFE 4.1/4.7) and no camera nodes, so the
-phone had no camera. The patches backport that tree:
+phone had no camera. The staged kernel patches (`patches/staging/camera/kernel/`) backport that tree:
 
-- `patches/kernel/0005`: CAMSS for SDM845 (CSIPHY incl. C-PHY, CSID gen2, VFE 17x, video nodes), reduced
+- `kernel/0008`: CAMSS for SDM845 (CSIPHY incl. C-PHY, CSID gen2, VFE 17x, video nodes), reduced
   to SDM845 and ported to the 5.10 media core (`camss-compat.h`); each sensor is linked as soon as it
   binds, so one sensor failing does not hide the others.
-- `patches/kernel/0006`: the IMX519, IMX376K and IMX371 drivers, the lens driver (`lc89821x`), and the
+- `kernel/0009`: the IMX519, IMX376K and IMX371 drivers, the lens driver (`lc89821x`), and the
   `v4l2-cci` register helpers (5.10 lacks them).
-- `patches/kernel/0007`: `sdm845-oneplus-camera.dtsi` (CAMSS node, CCI enabled, sensors, lenses, GPIO
+- `kernel/0010`: `sdm845-oneplus-camera.dtsi` (CAMSS node, CCI enabled, sensors, lenses, GPIO
   supplies, PM8998 LVS1, MCLK and pin states), included by `sdm845-oneplus-common.dtsi`.
-- `patches/kernel/oneplus6.config`: all of it as modules. The built-in kernel does not change (the config
+- `kernel/camera.config`: all of it as modules. The built-in kernel does not change (the config
   differs only by `=m` lines), so the kernel already on the phone runs the new device tree and loads the new
   modules: no MODVERSIONS or module signing in this kernel, same source and config for everything built in.
 
 ## Build
 
-After `03-apply-patches.sh` (which applies 0005-0007) and `04-build-kernel.sh`:
+With the staged topic applied (after the default patches) and the kernel built with its config fragment:
 
 ```sh
+STAGING=camera scripts/03-apply-patches.sh
+STAGING=camera scripts/04-build-kernel.sh
 camera/build-tools.sh          # static aarch64 media-ctl and yavta (OH SDK clang + musl), pinned sources
 camera/collect-test-files.sh   # modules, tools, phone scripts and a RAM-boot image into $WORK_DIR/camera-test
 ```
@@ -63,7 +66,7 @@ so the first one that fails names the broken part.
 The images have OH's camera framework, the Camera app and the camera host service, but the port never built a
 camera VDI (its `camera/` directory was an unused Unisoc copy), so no camera was published. OH's V4L2 VDI
 expects a camera with an ISP (YUV out of the video node, matched by driver name). CAMSS has no ISP and the
-same driver name on every node, so:
+same driver name on every node, so the staged OH patches (`patches/staging/camera/oh/<project>/`) add:
 
 - `device/board/oneplus/0007`: the V4L2 VDI in the board group (one camera, `imx376` = `lcam001`; the
   software pipeline nodes of OH's USB-camera VDI); `/vendor/bin/camss_setup imx376 1 0 0 0`, run once by init,
@@ -77,4 +80,6 @@ same driver name on every node, so:
   1280x960), the pipeline config, `camss_raw.cfg`, and the Camera app's `CameraProfiles.json`.
 - `build/0004`: the build checks rk3568's camera VDI has (exec_script allowlist, part-deps whitelist).
 
-The camera targets compile; the images with them have not been built or run yet.
+The camera targets compile; the images with them have not been built or run yet. Images with cameras need
+`STAGING=camera` for `03-apply-patches.sh` and `04-build-kernel.sh` (the board installs and loads the camera
+modules), then `05-build-oh.sh`.
