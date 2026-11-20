@@ -104,6 +104,9 @@ OH is put on slot B only and RAM-booted, so Android on slot A keeps working.
   look around. The images this repository builds keep the stock flags.
 - **ramoops does not help here:** the OH and Android kernels use the same ramoops region (0xac300000, 4 MB), but
   no record survives a reboot on this phone, not even Android to Android.
+- **RAM in crash-dump mode** (later, 2026-11-19): a phone that hangs or panics waits in Qualcomm crash-dump mode
+  with its RAM intact, and `scripts/crashdump.py` reads the kernel's own log, its tasks and TrustZone's diagnostics
+  from there ([`docs/crash-dump.md`](crash-dump.md)).
 - **WSL + Windows tools:** a long-running WSL shell can hold a dead interop socket (`UtilAcceptVsock ... accept4
   failed 110`; every `.exe` call fails). Point `WSL_INTEROP` at a `/run/WSL/*_interop` socket that answers
   (not necessarily the newest one); `config.sh` tests them and picks a live one.

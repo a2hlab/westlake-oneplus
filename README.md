@@ -160,7 +160,8 @@ bring-up record: every failure, how it showed and what fixed it.
   the device to Linux with usbipd-win first; see the script). `scripts/crashdump.py kmsg DIR --system-map MAP`
   reads the kernel's own log (every message, whatever the loglevel), all tasks with the stacks of running and
   blocked ones, and TrustZone's diagnostics (bus errors, watchdog bites) from RAM. `scripts/recover-phone.sh` does
-  all of it, restarts the phone and waits until OH is up again (settings in its header).
+  all of it, restarts the phone and waits until OH is up again (settings in its header). How to read a capture, and
+  which of TrustZone's counters every capture shows: [`docs/crash-dump.md`](docs/crash-dump.md).
 - `hdc shell reboot bootloader` takes a running OH back to fastboot.
 
 ## Layout
