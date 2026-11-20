@@ -47,6 +47,8 @@ else
 	echo "sensor entity \"$ent\" on msm_csiphy$phy"
 	fmt=$($MC -d $M --get-v4l2 "\"$ent\":0" | sed -n 's/.*fmt:\([A-Z0-9_]*\/[0-9]*x[0-9]*\).*/\1/p')
 	[ -n "$fmt" ] || { echo "cannot read the sensor format"; exit 1; }
+	# the CSID refuses a CSIPHY link while its test pattern generator is on (step "tpg" leaves it on)
+	$YAVTA --no-query -w "0x009f0903 0" $($MC -d $M -e msm_csid0) >/dev/null
 	$MC -d $M -l "\"msm_csiphy$phy\":1->\"msm_csid0\":0[1],\"msm_csid0\":1->\"msm_vfe0_rdi0\":0[1]" || exit 1
 	$MC -d $M -V "\"$ent\":0[fmt:$fmt field:none],\"msm_csiphy$phy\":0[fmt:$fmt field:none],\"msm_csid0\":0[fmt:$fmt field:none],\"msm_vfe0_rdi0\":0[fmt:$fmt field:none]" || exit 1
 	sd=$($MC -d $M -e "$ent")

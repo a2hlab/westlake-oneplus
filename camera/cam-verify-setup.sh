@@ -6,6 +6,7 @@ MC=$D/media-ctl
 M=$(for m in /dev/media*; do $MC -d $m -p 2>/dev/null | grep -q qcom-camss && echo $m; done | head -1)
 [ -n "$M" ] || { echo "no qcom-camss media device"; exit 1; }
 $MC -d $M -r
+$D/yavta --no-query -w "0x009f0903 0" $($MC -d $M -e msm_csid0) >/dev/null   # CSID test pattern off
 vid=$($D/camss_setup imx376 1 0 0 0) || { echo "camss_setup failed:"; dmesg | grep camss_setup | tail -3; exit 1; }
 echo "camss_setup -> $vid"
 for e in msm_csiphy1 msm_csid0 msm_vfe0_rdi0; do echo "$e: $($MC -d $M --get-v4l2 "\"$e\":0")"; done
