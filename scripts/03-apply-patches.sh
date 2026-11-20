@@ -2,8 +2,11 @@
 # Apply, in order: the OnePlus port's own OH patches (the same set its init_patch.sh applies), this repo's OH
 # patches, the kernel patches, and the build.sh Node version. Safe to re-run: applied patches are skipped.
 # CHECK_ONLY=1 only reports which patches are applied and applies nothing.
+# STAGING="topic ...": also the staged patches of those topics (patches/staging/<topic>: not yet run on the phone,
+# see patches/staging/README.md), each after its project's default patches.
 set -euo pipefail
 . "$(dirname "$0")/config.sh"
+for t in $STAGING; do [ -d "$REPO_DIR/patches/staging/$t" ] || die "no staged topic '$t' in patches/staging"; done
 cd "$OH_ROOT"
 
 # The patches in order, one "PROJECT_DIR<tab>PATCH" line each.
@@ -19,7 +22,21 @@ list_patches() {
   find "$REPO_DIR/patches/oh" -name '*.patch' | sort | while IFS= read -r p; do
     d=${p#$REPO_DIR/patches/oh/}; printf '%s\t%s\n' "$(dirname "$d")" "$p"
   done
+  staged oh
   for p in "$REPO_DIR"/patches/kernel/*.patch; do printf '%s\t%s\n' "$KERNEL_SRC" "$p"; done
+  staged kernel
+}
+
+# staged oh|kernel: the staged topics' patches (STAGING), by project, then file name.
+staged() {
+  local t p d
+  for t in $STAGING; do
+    [ -d "$REPO_DIR/patches/staging/$t/$1" ] || continue
+    find "$REPO_DIR/patches/staging/$t/$1" -name '*.patch' | while IFS= read -r p; do
+      if [ "$1" = kernel ]; then d=$KERNEL_SRC; else d=${p#$REPO_DIR/patches/staging/$t/oh/}; d=$(dirname "$d"); fi
+      printf '%s\t%s\t%s\n' "$d" "$(basename "$p")" "$p"
+    done
+  done | sort -t$'\t' -k1,1 -k2,2 | cut -f1,3
 }
 
 # applied_count DIR PATCH...: how many of the PATCHes, from the first on, DIR has. A project's patches are checked as
@@ -43,7 +60,7 @@ applied_count() {
   echo "$k"
 }
 
-step "patches, each project's in order: the port's (device/board/oneplus/fajita/patch), this repo's, the kernel's"
+step "patches, each project's in order: the port's (device/board/oneplus/fajita/patch), this repo's, the kernel's${STAGING:+; staged: $STAGING}"
 mapfile -t entries < <(list_patches)
 mapfile -t dirs < <(printf '%s\n' "${entries[@]}" | cut -f1 | awk '!seen[$0]++')
 for d in "${dirs[@]}"; do

@@ -10,9 +10,13 @@ mkdir -p "$KERNEL_OUT"
 K=(make -C "$KERNEL_SRC" O="$KERNEL_OUT" ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang HOSTCC=clang LOCALVERSION=
    KBUILD_BUILD_USER=builder KBUILD_BUILD_HOST=oneplus6)
 
-step "config: sdm845_ohos_defconfig + patches/kernel/oneplus6.config"
+step "config: sdm845_ohos_defconfig + patches/kernel/oneplus6.config${STAGING:+ + staged configs ($STAGING)}"
 "${K[@]}" sdm845_ohos_defconfig
 cat "$REPO_DIR/patches/kernel/oneplus6.config" >> "$KERNEL_OUT/.config"
+for t in $STAGING; do
+  [ -d "$REPO_DIR/patches/staging/$t" ] || die "no staged topic '$t' in patches/staging"
+  for c in "$REPO_DIR/patches/staging/$t/kernel/"*.config; do if [ -f "$c" ]; then cat "$c" >> "$KERNEL_OUT/.config"; fi; done
+done
 "${K[@]}" olddefconfig
 grep -q '^CONFIG_FONT_TER16x32=y' "$KERNEL_OUT/.config" || die "config fragment not applied"
 

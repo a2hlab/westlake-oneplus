@@ -38,6 +38,8 @@ OH_CLANG_BIN=$OH_ROOT/prebuilts/clang/ohos/linux-x86_64/llvm/bin
 # lsm=...,selinux,...: the kernel has SELinux built in, but its default LSM list (CONFIG_LSM) leaves it out.
 BOOT_CMDLINE_BASE="console=tty0 fbcon=font:TER16x32 loglevel=1 hardware=fajita default_boot_device=soc@0/1d84000.ufshc ohos.boot.eng_mode=on lsm=lockdown,yama,loadpin,safesetid,integrity,selinux,bpf"
 : "${BOOT_CMDLINE_EXTRA:=}"   # e.g. op6.logdump=1, or "ignore_loglevel" to see every boot message on screen
+# Staged patch topics to apply and build with (patches/staging/<topic>, not yet run on the phone; empty: none).
+: "${STAGING:=}"
 
 # --- phone ---
 : "${ADB:=adb}"

@@ -232,6 +232,9 @@ scripts/14-data-partition.sh --erase-android-data   # userdata -> Android (ANDRO
 | [`foundation/bundlemanager`](patches/oh/foundation/bundlemanager) | with SELinux on, two `defines` written `"-DWITH_SELINUX"` (the port's changes) broke the build |
 | [`third_party/jsframework`](patches/oh/third_party/jsframework), [`third_party/libnl`](patches/oh/third_party/libnl) | Node 14 for one tool while the build uses Node 18; autoconf 2.72 |
 
+Patches that are written but not yet proven on the phone are kept apart in [`patches/staging`](patches/staging),
+applied only when `STAGING` names their topic: the hang work (`hang`) and the cameras (`camera`).
+
 Each patch file starts with its rationale. [`docs/bringup-notes.md`](docs/bringup-notes.md) has the full
 bring-up record: every failure, how it showed and what fixed it.
 
@@ -241,7 +244,9 @@ bring-up record: every failure, how it showed and what fixed it.
   drawn there froze the phone (see `BOOT_CMDLINE_BASE` in `scripts/config.sh`). To watch a boot,
   `BOOT_CMDLINE_EXTRA=ignore_loglevel scripts/06-make-boot.sh` shows every message.
 - A phone that hangs or panics waits in Qualcomm crash-dump mode (USB `05c6:900e`) with its RAM intact; the main
-  branch's `scripts/crashdump.py` reads the kernel's console log from there and restarts the phone.
+  branch's `scripts/crashdump.py` reads the kernel's own log, all tasks with their stacks and TrustZone's
+  diagnostics from there and restarts the phone, and its `scripts/recover-phone.sh` does all of that and waits
+  until OH is up again.
 - `BOOT_CMDLINE_EXTRA=op6.logdump=1 scripts/06-make-boot.sh` makes OH write its kernel log, process list and
   crash dumps every 4 s to the unused end of `system_b`. After a hang, force-restart (Power ~10 s; the phone
   falls back to Android) and run `scripts/read-logdump.sh`. ramoops does not survive a reboot on this phone.
@@ -254,7 +259,8 @@ manifests/ohport.xml            port repos pinned to the tested commits (repo lo
 manifests/oh61-full-pinned.xml  every project of the tested tree with its commit
 patches/oh/<project path>/      patches for OpenHarmony projects
 patches/kernel/                 kernel patches + config fragment
-scripts/                        host setup, sync, build, install, boot (00..12), helpers
+patches/staging/<topic>/        patches not yet proven on the phone: applied only with STAGING=<topic>
+scripts/                        host setup, sync, build, install, boot (00..15), helpers
 docs/bringup-notes.md           how it was brought up, failure by failure
 ```
 
