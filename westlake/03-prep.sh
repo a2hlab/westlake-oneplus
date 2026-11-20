@@ -40,6 +40,15 @@ else
     && echo "  wake lock held" || die "could not take the wake lock"
 fi
 
+step "audio and compute DSPs: no automatic restart"
+# 2026-11-19, round o70b: the audio DSP crashed ("remoteproc-adsp: fatal error received: SFR Init: wdog or kernel
+# error suspected") and the whole phone hung 7 ms into the kernel's restart of it (while it removed the DSP's fastrpc
+# devices), read back from the hung phone's RAM. Without the automatic restart a DSP crash leaves the phone running,
+# without sound until the next boot. The modem keeps its restart (Wi-Fi depends on it). Not kept across reboots.
+wl_hdc shell 'for r in /sys/class/remoteproc/remoteproc*; do n=$(cat $r/name); case $n in *adsp*|*cdsp*)
+    d=/sys/kernel/debug/remoteproc/${r##*/}/recovery; echo disabled > $d && echo "  $n: $(cat $d)" || echo "  $n: not changed";;
+  esac; done' | tr -d '\r'
+
 step "host HAP $WL_HOST"
 hap=$(wl_build "$WL_HOST_HAP"); [ -f "$hap" ] || die "$hap missing"
 if wl_hdc shell "bm dump -n $WL_HOST" | grep -q '"bundleName"'; then

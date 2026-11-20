@@ -17,6 +17,12 @@ pick() {  # pick [skip]: first socket that answers, other than skip
   return 1
 }
 s=$(cat "$CACHE" 2>/dev/null); [ -S "$s" ] || s=$(pick)
+# Optional timing log (profiling a round): while the file named by HDC_TIMING_FLAG exists, every call appends
+# "<start> <end> <rc> <arguments>" to HDC_TIMING_LOG (both default to $XDG_RUNTIME_DIR, else /tmp); touch or
+# remove the flag file while a round runs.
+TF=${HDC_TIMING_FLAG:-${XDG_RUNTIME_DIR:-/tmp}/hdc-timing.on}; t0=""; [ -f "$TF" ] && t0=$(date +%s.%N)
+timing() { [ -n "$t0" ] && printf '%s %s %s %s\n' "$t0" "$(date +%s.%N)" "$1" "$(printf '%s ' "${@:2}" | cut -c1-160)" \
+  >> "${HDC_TIMING_LOG:-${XDG_RUNTIME_DIR:-/tmp}/hdc-timing.log}"; return 0; }
 for attempt in 1 2 3 4 5; do
   out=$(WSL_INTEROP=$s "$HDC_EXE" "$@" 2>&1); rc=$?
   if printf '%s' "$out" | grep -q "UtilAcceptVsock"; then
@@ -24,6 +30,6 @@ for attempt in 1 2 3 4 5; do
     s=$(pick "$s") || { sleep 1; s=$(pick); }
     continue
   fi
-  printf '%s\n' "$out"; exit $rc
+  timing "$rc" "$@"; printf '%s\n' "$out"; exit $rc
 done
 printf '%s\n' "$out"; exit 1

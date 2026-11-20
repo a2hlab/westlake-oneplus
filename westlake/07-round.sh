@@ -75,7 +75,9 @@ WAIT=${WAIT:-45}; MINWAIT=${MINWAIT:-20}; MIN_FREE_MB=${MIN_FREE_MB:-1400}
 # An app's memory and the RAM disk come out of the same 7.6 GB.
 MIN_MEM_MB=${MIN_MEM_MB:-2000}; STOP_MEM_MB=${STOP_MEM_MB:-600}
 say() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
-dev() { wl_hdc shell "$@" | tr -d '\r'; }
+# A shell command on the phone. With a time limit: when the phone hangs (crash-dump mode) in the middle of a call,
+# hdc waits for it forever, and the round would never notice that the phone is gone.
+dev() { timeout -k 10 "${DEV_TIMEOUT:-300}" "$WL_HDC" -t "$HDC_TARGET" shell "$@" </dev/null | tr -d '\r'; }
 recv() {  # recv REMOTE LOCALNAME: into $RECV
   local to; to=$(wl_tool_path "$RECV"); case "$to" in *\\*) to="$to\\$2" ;; *) to="$to/$2" ;; esac
   rm -f "$RECV/$2"; (cd "$RECV" && timeout 60 "$WL_HDC" -t "$HDC_TARGET" file recv "$1" "$to" </dev/null >/dev/null 2>&1)
@@ -199,8 +201,9 @@ except Exception: pass' "$CORPUS/$MAP/$pkg/gap-map.json" 2>/dev/null)
   [ -n "${2:-}" ] && { prep "$2" & pf=$!; }
   if [ -f "$rep" ]; then
     read -r C PP R S sock < <(python3 -I -c 'import json, sys
-d = json.load(open(sys.argv[1])); print(d.get("child", ""), d.get("parent", ""), d.get("runtime", "-"), d.get("stage", "-"),
-  d.get("socket", "-").rsplit("/", 1)[-1])' "$rep")
+d = json.load(open(sys.argv[1])); print(d.get("child") or "-", d.get("parent") or "-", d.get("runtime", "-"), d.get("stage", "-"),
+  (d.get("socket") or "-").rsplit("/", 1)[-1])' "$rep")
+    [ "$C" = - ] && C=; [ "$PP" = - ] && PP=   # no child (JSON null): a failed launch, not process "None"
     cp "$rep" "$ev.report.json"
   fi
   cp "$o.log" "$ev.launch.log"
