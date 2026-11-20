@@ -6,6 +6,10 @@
 # $WL_ROUND/report-TAG/ (finish.log, retry-list.txt, the report). Start it detached next to the supervisor:
 #   setsid nohup finish-round.sh TAG BASE >/dev/null 2>&1 &
 # RETRY_RESTARTS (8): the retry pass's MAX_RESTARTS.
+# MERGE_FROM=DIR: the round is shared with a second phone whose share runs in round directory DIR (README, "Two
+# phones"). Its supervisor also counts as round TAG's, so this waits for both; then merge-round.sh brings DIR's
+# results in, and a completion pass on this phone launches the apps that neither phone reached (start this script
+# without LIST), before the retry pass and the report.
 set -uo pipefail
 [ -n "${WL_ENV:-}" ] && { set -a; . "$WL_ENV"; set +a; }
 . "$(dirname "$0")/../config.sh"
@@ -18,6 +22,14 @@ while running; do sleep 120; done
 last=$(tail -1 "$R/supervise-$TAG.log" 2>/dev/null)
 say "first pass over: $last"
 case $last in *"round $TAG done"*) ;; *) say "the first pass did not finish: stopping here"; exit 1 ;; esac
+if [ -n "${MERGE_FROM:-}" ]; then
+  say "the other phone's share: $(tail -1 "$MERGE_FROM/supervise-$TAG.log" 2>/dev/null)"
+  bash "$T/merge-round.sh" "$TAG" "$MERGE_FROM" 2>&1 | tee -a "$OUT/finish.log"
+  MAX_RESTARTS=${RETRY_RESTARTS:-8} bash "$T/supervise-round.sh" "$TAG"
+  last=$(tail -1 "$R/supervise-$TAG.log" 2>/dev/null)
+  say "completion pass over: $last"
+  case $last in *"round $TAG done"*) ;; *) say "the completion pass did not finish: stopping here"; exit 1 ;; esac
+fi
 
 RES=$R/logs/$TAG/results.tsv
 awk -F'\t' '$2 == "launched" { ok[$1] = 1 } $2 == "phone-hung" { hung[$1] = 1 } { seen[$1] = 1 }
