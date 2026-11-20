@@ -551,6 +551,19 @@ class Kernel:
                     pass
         return out
 
+    def counter_offset(self):
+        """Seconds between the 19.2 MHz system counter (TrustZone's and the AOP's log times) and the kernel's clock,
+        from sched_clock's epoch ('cd' in kernel/time/sched_clock.c: read_data[0].epoch_ns/epoch_cyc at 8/16, rate
+        at 96 in 5.10), or None."""
+        if 'cd' not in self.map.sym:
+            return None
+        raw = self.read_va(self.sym('cd'), 104)
+        epoch_ns, epoch_cyc = struct.unpack_from('<QQ', raw, 8)
+        rate = struct.unpack_from('<Q', raw, 96)[0]
+        if not rate or not epoch_cyc:
+            return None
+        return epoch_cyc / rate - epoch_ns / 1e9
+
     def is_text(self, addr):
         if self.sym('_text') <= addr < self.map.etext + self.kaslr:
             return True
@@ -888,8 +901,12 @@ class Capture:
         self.write('printk/descs.bin', descs)
         self.write('printk/infos.bin', infos)
         self.write('printk/text.bin', data)
+        try:
+            counter = k.counter_offset()
+        except (Refused, struct.error):
+            counter = None
         layout.update(kernel_base=k.base, kaslr=k.kaslr, kimage_voffset=k.voffset, memstart_addr=k.memstart,
-                      va_bits=k.va_bits, banner=k.banner, vars=k.kernel_vars())
+                      va_bits=k.va_bits, banner=k.banner, vars=k.kernel_vars(), counter_minus_kernel_s=counter)
         self.write('printk/layout.json', json.dumps({x: ('%#x' % y if isinstance(y, int) and y > 4096 else y)
                                                      for x, y in layout.items()}, indent=1) + '\n')
         records = parse_ring(layout['count_bits'], descs, infos, data, layout['size_bits'])
@@ -917,7 +934,9 @@ class Capture:
                                                                       len(reserved)),
                          'jiffies_64 %s, panic_cpu %s, oops_in_progress %s, online CPUs %s' % (
                              v.get('jiffies_64'), v.get('panic_cpu'), v.get('oops_in_progress'),
-                             bin(v.get('__cpu_online_mask', 0))), '', 'last kernel messages:']
+                             bin(v.get('__cpu_online_mask', 0))),
+                         'system counter time - kernel time: %s s (TrustZone and AOP logs use the counter)' % (
+                             '%.6f' % counter if counter is not None else '?'), '', 'last kernel messages:']
         self.summary += lines[-40:] + ['']
         return {'records': len(records), 'first_ts': round(first, 3), 'last_ts': round(last, 3), 'missing': gaps}
 
