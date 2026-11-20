@@ -3,7 +3,8 @@
 # plus large fsync'd writes, in a loop. Progress in /data/local/tmp/stress/progress.txt. Runs on the phone (toybox
 # sh) and needs about 3 GB free on /data:
 #   hdc file send io-stress.sh /data/local/tmp/; hdc shell 'nohup sh /data/local/tmp/io-stress.sh 15 >/dev/null 2>&1 &'
-# On 2026-11-19 it hung the phone (release kernel, no app running) within a minute.
+# Without kernel 0011 (the reserved-memory map) it hung the phone within a minute, with no app running; with it, it
+# ran its 15 minutes (34 rounds, about 100 GB written). See docs/hang-2026-11-19.md.
 D=/data/local/tmp/stress; mkdir -p $D; : > $D/progress.txt
 end=$(( $(date +%s) + ${1:-15} * 60 )); i=0
 while [ $(date +%s) -lt $end ]; do

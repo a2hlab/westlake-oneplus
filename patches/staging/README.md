@@ -20,5 +20,5 @@ out. Undo them, last first, with `git -C <project> apply -R <patch>` before goin
 
 | topic | what | state |
 |---|---|---|
-| [`hang`](hang) | kernel `0005`-`0007`: the access-token device's terminal probes without a log line, fastrpc session 0, UFS interconnect votes; a config fragment and `log_buf_len=4M` for crash-dump captures; the storage stress that hangs the phone | `0007` ran on the phone and did not stop the hang; the others are not evaluated |
+| [`hang`](hang) | kernel `0005`-`0007`: the access-token device's terminal probes without a log line, fastrpc session 0, UFS interconnect votes; a config fragment and `log_buf_len=4M` for crash-dump captures; the memory and storage stresses and the probe module that found the hang's cause (the memory map: `kernel/0011`, default build) | `0007` ran on the phone and is not needed; `0005`, `0006` and the rest are not evaluated |
 | [`camera`](camera) | kernel `0008`-`0010`: SDM845 camera subsystem, the three sensors and lenses, their device tree (all modules); OH: the camera HDI for the rear IMX376K | built (kernel modules and DTB, the OH camera targets), not run on the phone |
