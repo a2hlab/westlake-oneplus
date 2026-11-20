@@ -1,0 +1,17 @@
+fastrpc: invalidate session 0 too when a compute context bank is removed (the loop started at 1, as fixed in
+later 5.10 stable releases). The removal runs when the DSP restarts or stops (seen in the audio DSP's crash
+recovery on this phone); a stale valid session 0 then points at a removed device.
+
+diff --git a/drivers/misc/fastrpc.c b/drivers/misc/fastrpc.c
+index eed047e97..04b355af7 100644
+--- a/drivers/misc/fastrpc.c
++++ b/drivers/misc/fastrpc.c
+@@ -1592,7 +1592,7 @@ static int fastrpc_cb_remove(struct platform_device *pdev)
+ 	int i;
+ 
+ 	spin_lock_irqsave(&cctx->lock, flags);
+-	for (i = 1; i < FASTRPC_MAX_SESSIONS; i++) {
++	for (i = 0; i < FASTRPC_MAX_SESSIONS; i++) {
+ 		if (cctx->session[i].sid == sess->sid) {
+ 			cctx->session[i].valid = false;
+ 			cctx->sesscount--;

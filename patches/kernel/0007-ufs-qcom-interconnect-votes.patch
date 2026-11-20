@@ -1,0 +1,126 @@
+ufs-qcom: vote interconnect bandwidth for the UFS host ("ufs-ddr" for its DMA, "cpu-ufs" for the CPUs' register
+path), as later kernels do (v6.x drivers/ufs/host/ufs-qcom.c, and the sdm845 device tree's interconnects
+properties). 5.10 votes nothing for UFS, so its traffic and register accesses depend on what other masters vote;
+upstream's comment: "Without proper bandwidth vote, register access might fail." On this phone several hangs into
+crash-dump mode came with heavy UFS I/O (dd of a partition, unpacking a large app) and ended with TrustZone
+handling NoC (bus) errors. Values: the v6.x table's for HS-G3 on two lanes, voted while the controller's clocks
+are on (before the first register access at init), and dropped when they go off. Not yet tested on the phone.
+
+diff --git a/arch/arm64/boot/dts/qcom/sdm845.dtsi b/arch/arm64/boot/dts/qcom/sdm845.dtsi
+index 75a01f9d2..ca77b0ad9 100644
+--- a/arch/arm64/boot/dts/qcom/sdm845.dtsi
++++ b/arch/arm64/boot/dts/qcom/sdm845.dtsi
+@@ -2181,6 +2181,10 @@
+ 				<0 0>,
+ 				<75000000 300000000>;
+ 
++			interconnects = <&aggre1_noc MASTER_UFS_MEM 0 &mem_noc SLAVE_EBI1 0>,
++					<&gladiator_noc MASTER_APPSS_PROC 0 &config_noc SLAVE_UFS_MEM_CFG 0>;
++			interconnect-names = "ufs-ddr", "cpu-ufs";
++
+ 			status = "disabled";
+ 		};
+ 
+diff --git a/drivers/scsi/ufs/ufs-qcom.c b/drivers/scsi/ufs/ufs-qcom.c
+index 08331ecbe..cde431904 100644
+--- a/drivers/scsi/ufs/ufs-qcom.c
++++ b/drivers/scsi/ufs/ufs-qcom.c
+@@ -15,6 +15,8 @@
+ #include "ufshcd.h"
+ #include "ufshcd-pltfrm.h"
+ #include "unipro.h"
++#include <linux/interconnect.h>
++
+ #include "ufs-qcom.h"
+ #include "ufshci.h"
+ #include "ufs_quirks.h"
+@@ -886,6 +888,42 @@ static void ufs_qcom_set_caps(struct ufs_hba *hba)
+  *
+  * Returns 0 on success, non-zero on failure.
+  */
++/*
++ * Interconnect bandwidth for the UFS host, as later kernels vote it (drivers/ufs/host/ufs-qcom.c, v6.x): without a
++ * vote the controller's DMA and the CPUs' accesses to its registers depend on what other masters vote, and register
++ * access can fail. The values are the v6.x table's for HS-G3 on two lanes (this phone's link), in KB/s, voted
++ * whenever the controller's clocks are on.
++ */
++#define UFS_QCOM_MEM_BW_KBPS	1492582
++#define UFS_QCOM_CFG_BW_KBPS	204800
++
++static void ufs_qcom_icc_set_bw(struct ufs_qcom_host *host, u32 mem_bw, u32 cfg_bw)
++{
++	int ret;
++
++	ret = icc_set_bw(host->icc_ddr, 0, mem_bw);
++	if (ret < 0)
++		dev_err(host->hba->dev, "ufs-ddr bandwidth vote failed: %d\n", ret);
++	ret = icc_set_bw(host->icc_cpu, 0, cfg_bw);
++	if (ret < 0)
++		dev_err(host->hba->dev, "cpu-ufs bandwidth vote failed: %d\n", ret);
++}
++
++static int ufs_qcom_icc_init(struct ufs_qcom_host *host)
++{
++	struct device *dev = host->hba->dev;
++
++	host->icc_ddr = devm_of_icc_get(dev, "ufs-ddr");
++	if (IS_ERR(host->icc_ddr))
++		return PTR_ERR(host->icc_ddr);
++	host->icc_cpu = devm_of_icc_get(dev, "cpu-ufs");
++	if (IS_ERR(host->icc_cpu))
++		return PTR_ERR(host->icc_cpu);
++	/* before the first access to the controller's or the PHY's registers */
++	ufs_qcom_icc_set_bw(host, UFS_QCOM_MEM_BW_KBPS, UFS_QCOM_CFG_BW_KBPS);
++	return 0;
++}
++
+ static int ufs_qcom_setup_clocks(struct ufs_hba *hba, bool on,
+ 				 enum ufs_notify_change_status status)
+ {
+@@ -902,7 +940,9 @@ static int ufs_qcom_setup_clocks(struct ufs_hba *hba, bool on,
+ 
+ 	switch (status) {
+ 	case PRE_CHANGE:
+-		if (!on) {
++		if (on) {
++			ufs_qcom_icc_set_bw(host, UFS_QCOM_MEM_BW_KBPS, UFS_QCOM_CFG_BW_KBPS);
++		} else {
+ 			if (!ufs_qcom_is_link_active(hba)) {
+ 				/* disable device ref_clk */
+ 				ufs_qcom_dev_ref_clk_ctrl(host, false);
+@@ -914,6 +954,8 @@ static int ufs_qcom_setup_clocks(struct ufs_hba *hba, bool on,
+ 			/* enable the device ref clock for HS mode*/
+ 			if (ufshcd_is_hs_mode(&hba->pwr_info))
+ 				ufs_qcom_dev_ref_clk_ctrl(host, true);
++		} else {
++			ufs_qcom_icc_set_bw(host, 0, 0);
+ 		}
+ 		break;
+ 	}
+@@ -1055,6 +1097,13 @@ static int ufs_qcom_init(struct ufs_hba *hba)
+ 		goto out_variant_clear;
+ 	}
+ 
++	err = ufs_qcom_icc_init(host);
++	if (err) {
++		if (err != -EPROBE_DEFER)
++			dev_err(dev, "failed to acquire interconnect paths: %d\n", err);
++		goto out_variant_clear;
++	}
++
+ 	ufs_qcom_get_controller_revision(hba, &host->hw_ver.major,
+ 		&host->hw_ver.minor, &host->hw_ver.step);
+ 
+diff --git a/drivers/scsi/ufs/ufs-qcom.h b/drivers/scsi/ufs/ufs-qcom.h
+index 3f4922743..02b8aecef 100644
+--- a/drivers/scsi/ufs/ufs-qcom.h
++++ b/drivers/scsi/ufs/ufs-qcom.h
+@@ -206,6 +206,8 @@ struct ufs_qcom_host {
+ 
+ 	struct phy *generic_phy;
+ 	struct ufs_hba *hba;
++	struct icc_path *icc_ddr;	/* "ufs-ddr": the controller's DMA to DDR */
++	struct icc_path *icc_cpu;	/* "cpu-ufs": the CPUs' register path */
+ 	struct ufs_pa_layer_attr dev_req_params;
+ 	struct clk *rx_l0_sync_clk;
+ 	struct clk *tx_l0_sync_clk;
