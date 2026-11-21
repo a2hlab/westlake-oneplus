@@ -13,6 +13,8 @@
 #   NET_CHECK (8.8.8.8)              an address the phone must reach before each app (empty: no check)
 #   LOCALE (en-US)                   the locale apps get, as on Westlake's test board, whose language is English;
 #                                    empty: the phone's own (the image's default is Chinese)
+#   ORIENTATION (1)                  0: no app's bundle gets its launcher activity's screenOrientation (before
+#                                    2026-11-21 none did, and a landscape game drew into a portrait window)
 # Exit 3: /data stayed below MIN_FREE_MB; exit 4: the phone stopped answering, lost its framework stage (a reboot
 # empties a RAM disk: 03-prep.sh and 04-framework.sh again; 03-prep.sh is needed after every boot) or its network.
 # Run it again to resume.
@@ -117,6 +119,22 @@ prep() {  # stage packages (host only)
   WL_SC=$RS WL_CORPUS=$CORPUS WL_MANIFEST=$M MAP=$MAP python3 "$WL_HARNESS/device/prep_apps.py" "$@" >> "$LOG" 2>&1
 }
 result() { printf '%s\t%s\t%s\n' "hk-$1" "$2" "$3" >> "$RESULTS"; say "hk-$1 $2 $3"; }
+# The launcher activity's android:screenOrientation (Android's number; nothing when it has none), from the app's
+# download, for its OH ability: SceneBoard then turns the screen before the app's window is made. Kept in
+# launcher-orientation.tsv, so a rerun reads each download once.
+orientation_of() {
+  [ "${ORIENTATION:-1}" = 0 ] && return
+  grep -q -- "'--orientation'" "$M/tools/make_managed_bundle.py" || return   # a manifest from before it
+  local pkg=$1 activity=$2 o download
+  o=$(awk -F'\t' -v p="$pkg" -v a="$activity" '$1 == p && $2 == a {print $3; exit}' "$RS/launcher-orientation.tsv" 2>/dev/null)
+  if [ -z "$o" ]; then
+    download=$(ls "$CORPUS/dl/$pkg"@* 2>/dev/null | head -1)
+    [ -n "$download" ] || return
+    o=$(python3 -P "$TOOLS/launcher_orientation.py" --download "$download" --activity "$activity" 2>/dev/null) || return
+    printf '%s\t%s\t%s\n' "$pkg" "$activity" "${o:--}" >> "$RS/launcher-orientation.tsv"
+  fi
+  [ "$o" = - ] || echo "$o"
+}
 
 # Start clean: no app of an earlier run, no spawner of another build, the screen on and staying on.
 cleanup_board() {
@@ -162,9 +180,10 @@ print(json.load(open(sys.argv[1]))["application"]["launch_activity"])' "$in/app-
     [ -n "$mem" ] && [ "$mem" -ge "$MIN_MEM_MB" ] || { say "MEMORY GUARD: ${mem:-?} MB available < $MIN_MEM_MB"; return 3; }
   fi
   rm -rf "$o" "$o.log"; mkdir -p "$o"
-  # Its OH bundle, named after the package; its main ability is the launcher activity.
+  # Its OH bundle, named after the package; its main ability is the launcher activity, in its orientation.
+  local orient; orient=$(orientation_of "$pkg" "$activity")
   if ! python3 "$M/tools/make_managed_bundle.py" --host-build "$HOSTB" --package "$pkg" --activity "$activity" \
-         --out "$o/bundle" > "$o/bundle.log" 2>&1 ||
+         ${orient:+--orientation "$orient"} --out "$o/bundle" > "$o/bundle.log" 2>&1 ||
      ! python3 "$M/tools/sign_development_host.py" --workspace "$WL_SC/verify" --host-build "$o/bundle" --managed \
          --out "$o/signed" >> "$o/bundle.log" 2>&1; then
     result "$pkg" bundle-failed "$(tail -1 "$o/bundle.log" | cut -c1-150)"; return
