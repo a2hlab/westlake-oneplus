@@ -24,9 +24,18 @@ a = json.load(open(sys.argv[1]))["application"]; print(a["package"], a["launch_a
 out=$WL_OUT/managed-$app; rm -rf "$out"; mkdir -p "$out"
 rl=(--runtime-library appspawn-x); for l in $WL_RUNTIME_LIBS; do rl+=(--runtime-library "$l"); done
 
-step "OH bundle $pkg (ability $activity)"
+# The launcher activity's android:screenOrientation, for the ability (07-round.sh's orientation_of): the input's
+# base APK is its APK that is not one of its splits.
+orient=""
+if [ "${ORIENTATION:-1}" != 0 ] && grep -q -- "'--orientation'" "$WL_MANIFEST/tools/make_managed_bundle.py"; then
+  base=$(python3 -I -c 'import json, sys, pathlib
+d = pathlib.Path(sys.argv[1]); splits = {s["name"] for s in json.load(open(d / "app-input.json"))["application"].get("splits", [])}
+print(next((str(p) for p in sorted(d.glob("*.apk")) if p.name not in splits), ""))' "$input")
+  [ -n "$base" ] && orient=$(python3 -P "$WL_DIR/tools/launcher_orientation.py" --download "$base" --activity "$activity" 2>/dev/null) || orient=""   # set -e: an unreadable manifest only leaves it out
+fi
+step "OH bundle $pkg (ability $activity${orient:+, screenOrientation $orient})"
 python3 "$WL_MANIFEST/tools/make_managed_bundle.py" --host-build "$(wl_build "$WL_HOST_BUILD")" --package "$pkg" \
-  --activity "$activity" --out "$out/bundle" | tail -1
+  --activity "$activity" ${orient:+--orientation "$orient"} --out "$out/bundle" | tail -1
 python3 "$WL_MANIFEST/tools/sign_development_host.py" --workspace "$WL_SC/verify" --host-build "$out/bundle" \
   --managed --out "$out/signed" | tail -1
 wl_hdc file send "$(wl_tool_path "$out/signed/source-host.hap")" /data/local/tmp/wl-managed.hap >/dev/null
