@@ -6,6 +6,7 @@
 #     bind-mounted over /system/bin
 #   - makes sure the kernel wake lock no_suspend is held: this kernel's suspend drops USB (hdc) and loops
 #     (README.md, known limitations). Images after release v6.1.0.31-r2 take it at boot (board init.fajita.cfg)
+#   - sets the Android identity apps see (android-identity.sh: the phone's own, a OnePlus 6)
 #   - installs the Westlake host HAP ($WL_HOST)
 set -euo pipefail
 . "$(dirname "$0")/config.sh"
@@ -50,6 +51,9 @@ step "audio and compute DSPs: no automatic restart"
 wl_hdc shell 'for r in /sys/class/remoteproc/remoteproc*; do n=$(cat $r/name); case $n in *adsp*|*cdsp*)
     d=/sys/kernel/debug/remoteproc/${r##*/}/recovery; echo disabled > $d && echo "  $n: $(cat $d)" || echo "  $n: not changed";;
   esac; done' | tr -d '\r'
+
+# The phone's Android identity (a OnePlus 6), for Build.* and native property reads: android-identity.sh.
+bash "$(dirname "$0")/android-identity.sh" || die "android-identity.sh failed"
 
 step "host HAP $WL_HOST"
 hap=$(wl_build "$WL_HOST_HAP"); [ -f "$hap" ] || die "$hap missing"
