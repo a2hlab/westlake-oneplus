@@ -10,6 +10,7 @@
 # main window, lifecycle and input: no touch forwarder runs.
 # Afterwards: $WL_OUT/managed-APP/ has the bundle, the probe's report (launch/) and managed-APP.jpeg.
 # WL_PROBE_ARGS adds launch-probe options (for example --runtime-env NAME=VALUE for the app's environment).
+# APP_PROCESSES=0: every component in the launched process (07-round.sh's APP_PROCESSES).
 set -euo pipefail
 . "$(dirname "$0")/config.sh"
 app=${1:?usage: $0 APP}
@@ -61,6 +62,7 @@ python3 "$WL_MANIFEST/tools/probe_source_app.py" --workspace "$WL_SC/verify" --w
   --webview-input "$(wl_build "$WL_WEBVIEW_INPUT")" --bionic-shim-build "$(wl_build "$WL_SHIM")" \
   --runtime-library-build "$WL_OUT/override-op6" "${rl[@]}" --android-native-net-app-libraries \
   --host "$pkg" --managed --touch-mode off ${WL_PROBE_ARGS:-} \
+  $([ "${APP_PROCESSES:-1}" = 1 ] && echo --runtime-env WESTLAKE_APP_PROCESSES=1) \
   --hdc "$WL_HDC" --serial "$HDC_TARGET" --out "$out/launch" > "$out/launch.log" 2>&1 \
   || { tail -20 "$out/launch.log"; die "launch failed"; }
 grep -o 'SOURCE_APP_SPAWNED.*' "$out/launch.log" | head -1 | cut -c1-120

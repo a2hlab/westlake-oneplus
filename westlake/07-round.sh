@@ -15,6 +15,9 @@
 #                                    empty: the phone's own (the image's default is Chinese)
 #   ORIENTATION (1)                  0: no app's bundle gets its launcher activity's screenOrientation (before
 #                                    2026-11-21 none did, and a landscape game drew into a portrait window)
+#   APP_PROCESSES (1)                0: every component runs in the launched process, as before 2026-11-21; 1:
+#                                    westlake ADR-0002 app processes (WESTLAKE_APP_PROCESSES=1), a component declared
+#                                    for another process runs in a process of its own
 # Exit 3: /data stayed below MIN_FREE_MB; exit 4: the phone stopped answering, lost its framework stage (a reboot
 # empties a RAM disk: 03-prep.sh and 04-framework.sh again; 03-prep.sh is needed after every boot) or its network.
 # Run it again to resume.
@@ -100,6 +103,9 @@ rl=(--runtime-library appspawn-x); for l in $WL_RUNTIME_LIBS; do rl+=(--runtime-
 for l in $(ls "$WL_OUT/override-op6/lib" | grep -E '^libmainlinecronet\..*\.so$'); do rl+=(--runtime-library-add "$l"); done
 # The locale apps get: English, as on Westlake's test board, unless LOCALE says otherwise (empty: the phone's own).
 LOCALE=${LOCALE-en-US}; la=(); [ -n "$LOCALE" ] && la=(--runtime-env "WESTLAKE_LOCALE=$LOCALE")
+# ADR-0002 app processes: the app's own appspawn-x starts them from the request the launcher left the app
+# (WESTLAKE_SPAWN_REQUEST), under the managed launch as under the direct one.
+[ "${APP_PROCESSES:-1}" = 1 ] && la+=(--runtime-env WESTLAKE_APP_PROCESSES=1)
 helpers=$LAUNCH/helpers; mkdir -p "$helpers/native"
 cp "$WL_SC/workspace/westlake/native/"{source_app_namespace.c,host_spawn.c} "$WL_WESTLAKE/native/touchfwd.c" "$helpers/native/"
 
