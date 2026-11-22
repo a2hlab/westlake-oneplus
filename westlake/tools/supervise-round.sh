@@ -16,6 +16,9 @@
 # To stop a round: stop this script first (else it "recovers" the phone), then 07-round.sh.
 # RECOVER=none: never run recover-phone.sh, only wait for the phone to come back. With two phones (README, "Two
 # phones") a phone in crash-dump mode cannot be told from the other one, so only one phone's supervisor may reset it.
+# AFTER_PREP=COMMAND: run (by bash -c) after 03-prep.sh and 04-framework.sh, before the wait for the network, e.g. a
+# phone without Wi-Fi that gets its network from the PC (README, "A phone without Wi-Fi"): its tunnel is gone after
+# a reboot.
 set -uo pipefail
 [ -n "${WL_ENV:-}" ] && { set -a; . "$WL_ENV"; set +a; }
 . "$(dirname "$0")/../config.sh"
@@ -56,6 +59,7 @@ for n in $(seq 1 "$MAX_RESTARTS"); do
   fi
   sleep 60   # an unlock while the system is still starting can block SceneBoard
   { bash "$WL_DIR/03-prep.sh" && bash "$WL_DIR/04-framework.sh"; } >> "$LOG" 2>&1 || say "03-prep.sh or 04-framework.sh failed"
+  if [ -n "${AFTER_PREP:-}" ]; then bash -c "$AFTER_PREP" >> "$LOG" 2>&1 || say "AFTER_PREP failed (exit $?)"; fi
   for _ in $(seq 1 90); do online && break; sleep 20; done
   online && say "phone back online" || say "phone without network: the round waits for it or stops again"
 done

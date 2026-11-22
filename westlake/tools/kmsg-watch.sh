@@ -8,6 +8,8 @@
 # automatic restart off (this 5.10 kernel's restart path is not safe), which leaves the phone without sound until
 # the next boot. The round then sees the phone go, and the supervisor resumes it after the boot.
 # Start it detached next to the supervisor: setsid nohup kmsg-watch.sh TAG >/dev/null 2>&1 &
+# KMSG_INTERVAL (5): seconds between reads. On a PC whose Windows hdc.exe also serves another session's round, keep
+# it at 30 or more: every hdc.exe start goes through WSL interop, and their timeouts rise with the call rate.
 set -uo pipefail
 [ -n "${WL_ENV:-}" ] && { set -a; . "$WL_ENV"; set +a; }
 . "$(dirname "$0")/../config.sh"
@@ -36,6 +38,6 @@ while pgrep -f "^([^ ]*/)?bash [^ ]*supervise-round\.sh $TAG( |\$)" >/dev/null; 
   elif [ $down = 0 ]; then
     echo "$(date '+%F %T') phone does not answer" >> "$O"; down=1
   fi
-  sleep 5
+  sleep "${KMSG_INTERVAL:-5}"
 done
 echo "$(date '+%F %T') supervisor gone: stop" >> "$O"
