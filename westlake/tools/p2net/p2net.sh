@@ -1,5 +1,5 @@
 #!/bin/bash
-# p2net.sh up | down [--pc] | status: a network for a phone without Wi-Fi, through the PC (README, "A phone
+# p2net.sh up | keep | down [--pc] | status: a network for a phone without Wi-Fi, through the PC (README, "A phone
 # without Wi-Fi"). Path:
 #   phone eth0 (tapfwd: a TAP interface) -> 127.0.0.1:PORT on the phone -> hdc rport over USB -> Windows
 #   localhost:PORT -> WSL localhost forwarding -> bridge.py -> passt (user-space NAT + DHCP + DNS) -> the PC's network
@@ -8,6 +8,10 @@
 #
 #   up      start what is missing (PC side, rport, tapfwd on the phone); safe to repeat. Run it after every boot of
 #           the phone and every WSL start: nothing of it persists on either side.
+#   keep    stay running and bring the tunnel back by itself: when the bridge has had no session for KEEP_GRACE
+#           (60) s, run `up` (checked every KEEP_INTERVAL, 30 s; no hdc call while a session runs). hdc drops a
+#           reverse forward now and then (2026-11-21: during another app's multi-GB file send; the phone then
+#           refused 127.0.0.1:PORT for 14 min), and a reboot of the phone ends tapfwd. Log: $P2NET_RUN/keep.log.
 #   down    stop tapfwd (eth0 goes, OH drops the network) and remove the rport; --pc: also stop passt and the bridge
 #   status  one screen of state
 #
@@ -122,9 +126,30 @@ status() {
   h shell 'echo "phone: tapfwd pid $(pidof tapfwd)"; ifconfig eth0 2>/dev/null | grep -E "inet addr|RX bytes"; hidumper -s 1151 2>/dev/null | grep -E "NetId|ConnStat|IsAvailable" | head -3; ping -c 1 -W 3 8.8.8.8 2>&1 | grep -E "packet loss"; tail -2 /data/local/tmp/tapfwd.log'
 }
 
+keep() {
+  local idle_since="" last
+  echo $$ > "$RUN/keep.pid"
+  while true; do
+    last=$(grep 'bridge: ' "$RUN/bridge.log" 2>/dev/null | tail -1)
+    if [ -z "$last" ] || [[ $last == *" ended after "* ]] || [[ $last == *"passt socket"* ]]; then
+      idle_since=${idle_since:-$(date +%s)}
+      if [ $(( $(date +%s) - idle_since )) -ge "${KEEP_GRACE:-60}" ]; then
+        echo "$(date '+%F %T') no bridge session for $(( $(date +%s) - idle_since )) s: up"
+        ( up ) > "$RUN/keep-up.log" 2>&1 && echo "$(date '+%F %T') up: $(grep -E '^rport|packet loss' "$RUN/keep-up.log" | tr '\n' ' ')" \
+          || echo "$(date '+%F %T') up failed (exit $?): $(tail -1 "$RUN/keep-up.log")"
+        idle_since=""
+      fi
+    else
+      idle_since=""
+    fi
+    sleep "${KEEP_INTERVAL:-30}"
+  done
+}
+
 case "${1:-status}" in
   up) up ;;
+  keep) keep >> "$RUN/keep.log" 2>&1 ;;
   down) shift; down "${1:-}" ;;
   status) status ;;
-  *) echo "usage: $0 up | down [--pc] | status" >&2; exit 2 ;;
+  *) echo "usage: $0 up | keep | down [--pc] | status" >&2; exit 2 ;;
 esac
