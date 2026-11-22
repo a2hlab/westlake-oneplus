@@ -221,8 +221,9 @@ RECOVER=none                         # see below
    first phone's supervisor resets phones; the second one's (`RECOVER=none`) waits for its phone to come back and
    then runs `03` and `04` again. A `kmsg-watch.sh` per phone (`WL_ENV`) keeps each phone's kernel log in its own
    round directory.
-4. Finish from the first phone's settings: `MERGE_FROM=<the second round directory> tools/finish-round.sh TAG BASE`
-   (without `LIST`). Every supervisor of round TAG counts, so it waits for both phones; then `merge-round.sh`
+4. Finish from the first phone's settings: `MERGE_FROM=<the second round directory> tools/finish-round.sh TAG BASE`,
+   with `LIST` set to the round's whole list when the round has one, else without `LIST`: the completion pass runs
+   with it, and without one it would launch every app of `apps.csv` that has no line yet. Every supervisor of round TAG counts, so it waits for both phones; then `merge-round.sh`
    appends the second phone's `results.tsv` lines and copies its per-app logs for the apps the first round has no
    line for, a completion pass on the first phone launches whatever neither phone reached, and the retry pass and
    the report run on the merged round as for one phone.
