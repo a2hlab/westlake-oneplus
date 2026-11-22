@@ -143,12 +143,22 @@ orientation_of() {
 }
 
 # Start clean: no app of an earlier run, no spawner of another build, the screen on and staying on.
+# App processes whose spawner is gone (parent init, uid of an app): what a stopped app leaves running. Under the managed
+# launch OH's app manager ends only the processes it started, so an app's own processes (westlake ADR-0002, ":push",
+# ":sandboxed_process0", ...) and its spawner's pre-initialized child outlived it, and they piled up: 31 of them,
+# 4.6 GB, stopped round o70w's first phone at the memory guard (2026-11-21). OH's own apps and the host are kept.
+KILL_ORPHANS='for p in /proc/[0-9]*; do pp=$(grep PPid $p/status 2>/dev/null | grep -oE "[0-9]+");
+  u=$(grep Uid $p/status 2>/dev/null | grep -oE "[0-9]+" | head -1);
+  [ "$pp" = 1 ] && [ -n "$u" ] && [ "$u" -ge 20010000 ] || continue;
+  case "$(ps -o args= -p ${p##*/} | tail -n 1)" in com.ohos.*|ohos.*|com.huawei.*|org.westlake.*) continue;; esac;
+  kill -9 ${p##*/}; done; exit 0'
 cleanup_board() {
   local leftover; leftover=$(cat "$RS/.installed" 2>/dev/null)
   [ -n "$leftover" ] && dev "aa force-stop $leftover >/dev/null 2>&1; bm uninstall -n $leftover >/dev/null 2>&1; exit 0" >/dev/null
   rm -f "$RS/.installed"
   dev "for p in \$(pidof appspawn-x); do kill -9 \$p; done; rm -rf /data/local/tmp/a2hlab-app-* /data/local/tmp/ev-*;
     rm -f /data/service/el1/public/westlake-registry/managed/*; exit 0" >/dev/null
+  dev "$KILL_ORPHANS" >/dev/null
 }
 cleanup_board
 dev "power-shell wakeup >/dev/null; power-shell timeout -o 86400000 >/dev/null; exit 0" >/dev/null
@@ -183,7 +193,11 @@ print(json.load(open(sys.argv[1]))["application"]["launch_activity"])' "$in/app-
   local mem; mem=$(mem_mb)
   if [ -z "$mem" ] || [ "$mem" -lt "$MIN_MEM_MB" ]; then
     cleanup_board; sleep 10; mem=$(mem_mb)
-    [ -n "$mem" ] && [ "$mem" -ge "$MIN_MEM_MB" ] || { say "MEMORY GUARD: ${mem:-?} MB available < $MIN_MEM_MB"; return 3; }
+    # Still short after the clean-up: a reboot gives it back, and the supervisor resumes the round after it
+    # (exit 4, as for a phone that went away). Before 2026-11-21 this stopped the round (exit 3, as a full /data).
+    [ -n "$mem" ] && [ "$mem" -ge "$MIN_MEM_MB" ] || {
+      say "MEMORY GUARD: ${mem:-?} MB available < $MIN_MEM_MB after the clean-up: rebooting the phone"
+      dev "sync; reboot" >/dev/null 2>&1; return 4; }
   fi
   rm -rf "$o" "$o.log"; mkdir -p "$o"
   # Its OH bundle, named after the package; its main ability is the launcher activity, in its orientation.
@@ -320,6 +334,7 @@ launch=$((t_launched - t_probe))s turn=$(( $(date +%s) - t_app ))s"
     for p in \$(pidof appspawn-x); do case \"\$(ps -o args= -p \$p | tail -n 1)\" in *--route*) ;; *) kill -9 \$p;; esac; done;
     bm uninstall -n $pkg >/dev/null 2>&1; rm -rf $S /data/local/tmp/ev-$C.* /data/service/el1/public/westlake-registry/managed/$pkg;
     exit 0" >/dev/null
+  dev "$KILL_ORPHANS" >/dev/null   # its own processes and its spawner's pre-initialized child
   rm -f "$RS/.installed"
   # The kernel log of the app's turn, and how many GPU faults it had.
   dev "dmesg" | python3 -I -c 'import re, sys
