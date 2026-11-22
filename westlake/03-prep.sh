@@ -48,9 +48,14 @@ step "audio and compute DSPs: no automatic restart"
 # kernel's restart is not safe (its SLIMbus driver lacks the restart handling of later kernels). Without it a DSP
 # crash leaves the phone running, without sound until the next boot. The modem keeps its restart (Wi-Fi depends on
 # it). Not kept across reboots.
-wl_hdc shell 'for r in /sys/class/remoteproc/remoteproc*; do n=$(cat $r/name); case $n in *adsp*|*cdsp*)
-    d=/sys/kernel/debug/remoteproc/${r##*/}/recovery; echo disabled > $d && echo "  $n: $(cat $d)" || echo "  $n: not changed";;
-  esac; done' | tr -d '\r'
+# WL_NO_RECOVERY (adsp cdsp): the remoteprocs, by part of their name, whose restart is turned off. A phone whose modem
+# crash-loops (a dead radio: "RF stuck in QLINK start state") adds 4080000.remoteproc, which stops the loop.
+for w in ${WL_NO_RECOVERY:-adsp cdsp}; do
+  case $w in *[!A-Za-z0-9._-]*) die "WL_NO_RECOVERY: '$w' is not a plain name" ;; esac
+done
+wl_hdc shell "for r in /sys/class/remoteproc/remoteproc*; do n=\$(cat \$r/name); for w in ${WL_NO_RECOVERY:-adsp cdsp}; do
+    case \$n in *\$w*) d=/sys/kernel/debug/remoteproc/\${r##*/}/recovery; echo disabled > \$d && echo \"  \$n: \$(cat \$d)\" || echo \"  \$n: not changed\";;
+  esac; done; done" | tr -d '\r'
 
 # The phone's Android identity (a OnePlus 6), for Build.* and native property reads: android-identity.sh.
 bash "$(dirname "$0")/android-identity.sh" || die "android-identity.sh failed"
