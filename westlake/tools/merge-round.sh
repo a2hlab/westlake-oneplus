@@ -2,7 +2,8 @@
 # merge-round.sh TAG OTHER_ROUND_DIR: bring round TAG's results from another round directory (a second phone's share
 # of the round, README "Two phones") into this one ($WL_ROUND): for every app that has no line in this round's
 # logs/TAG/results.tsv yet, its lines from OTHER_ROUND_DIR/logs/TAG/results.tsv are appended and its files there
-# (hk-<package>.*: log, hilog, screenshot, process map, crash dump, ...) are copied. Apps this round already has keep
+# (hk-<package>.*: log, hilog, screenshot, process map, crash dump, the .processes directory with its
+# other processes' logs, ...) are copied. Apps this round already has keep
 # their own results. Run it when neither round's runner is going (both supervisors have ended).
 set -uo pipefail
 [ -n "${WL_ENV:-}" ] && { set -a; . "$WL_ENV"; set +a; }
@@ -19,7 +20,7 @@ for app in $(cut -f1 "$SRC/results.tsv" | sort -u); do
   grep "^$app	" "$SRC/results.tsv" >> "$DST/results.tsv"
   for f in "$SRC/$app".*; do
     [ -e "$f" ] || continue
-    [ -e "$DST/$(basename "$f")" ] || { cp -p "$f" "$DST/"; files=$((files + 1)); }
+    [ -e "$DST/$(basename "$f")" ] || { cp -pR "$f" "$DST/"; files=$((files + 1)); }
   done
   n=$((n + 1))
 done

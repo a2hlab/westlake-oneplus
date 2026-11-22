@@ -221,8 +221,36 @@ RECOVER=none                         # see below
    first phone's supervisor resets phones; the second one's (`RECOVER=none`) waits for its phone to come back and
    then runs `03` and `04` again. A `kmsg-watch.sh` per phone (`WL_ENV`) keeps each phone's kernel log in its own
    round directory.
-4. Finish from the first phone's settings: `MERGE_FROM=<the second round directory> tools/finish-round.sh TAG BASE`
-   (without `LIST`). Every supervisor of round TAG counts, so it waits for both phones; then `merge-round.sh`
+4. Finish from the first phone's settings: `MERGE_FROM=<the second round directory> tools/finish-round.sh TAG BASE`,
+   with `LIST` set to the round's whole list when the round has one, else without `LIST`: the completion pass runs
+   with it, and without one it would launch every app of `apps.csv` that has no line yet. Every supervisor of round TAG counts, so it waits for both phones; then `merge-round.sh`
    appends the second phone's `results.tsv` lines and copies its per-app logs for the apps the first round has no
    line for, a completion pass on the first phone launches whatever neither phone reached, and the retry pass and
    the report run on the merged round as for one phone.
+
+### A phone without Wi-Fi
+
+A phone whose radio is dead (on the OnePlus 6 the Wi-Fi firmware runs on the modem: a modem that crash-loops with
+"RF stuck in QLINK start state" takes Wi-Fi with it) can get its network from the PC through the USB cable hdc
+already uses, with `tools/p2net/`:
+
+```
+phone eth0 (tapfwd, a TAP interface) -> 127.0.0.1:39921 on the phone -> hdc rport (USB) -> Windows localhost:39921
+  -> WSL localhost forwarding -> tools/p2net/bridge.py -> passt (user-space NAT with DHCP and DNS) -> the PC's network
+```
+
+Nothing on the phone's image changes: OH's EthernetManager takes any interface named `eth<n>` or `usb<n>`, runs
+DHCP on it, and NetConnManager registers it and probes it (HTTP 204: validated), as for a USB Ethernet adapter.
+Westlake reports it to apps as an Ethernet network (`TYPE_ETHERNET`, `TRANSPORT_ETHERNET`). Measured on a OnePlus 6
+(2026-11-21): ~20 MB/s download, 18 ms ping.
+
+1. Once: `P2NET_BUILD=<dir> tools/p2net/build.sh` builds `tapfwd` (static aarch64, with zig 0.13.0, checked
+   against its published SHA-256) and unpacks Ubuntu's `passt` package there (no install).
+2. After every boot of the phone and every WSL start (nothing of the tunnel persists):
+   `P2NET_TARGET=<hdc serial> P2NET_SERIAL=<ohos.boot.sn> P2NET_BUILD=<dir> tools/p2net/p2net.sh up`
+   (`status`, `down`). It checks the boot serial before anything else. passt answers pings through WSL's ping
+   sockets, which a WSL start turns off; `up` turns them on for your group (as root, through `wsl.exe -u root`).
+3. In a round, give that phone's supervisor `AFTER_PREP="tools/p2net/p2net.sh up"` (with the `P2NET_*` settings in
+   its `WL_ENV` file): after a reboot it brings the tunnel back before waiting for the network.
+
+The tunnel is one TCP stream through the Windows hdc server; it starts no hdc.exe processes once it is up.
