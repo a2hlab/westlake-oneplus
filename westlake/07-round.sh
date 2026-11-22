@@ -15,6 +15,8 @@
 #                                    empty: the phone's own (the image's default is Chinese)
 #   ORIENTATION (1)                  0: no app's bundle gets its launcher activity's screenOrientation (before
 #                                    2026-11-21 none did, and a landscape game drew into a portrait window)
+#   ORPHAN_KILL (1)                  0: leave app processes whose spawner is gone (see KILL_ORPHANS) and log how many
+#                                    each app left: for a spawner that ends them itself
 #   APP_PROCESSES (1)                0: every component runs in the launched process, as before 2026-11-21; 1:
 #                                    westlake ADR-0002 app processes (WESTLAKE_APP_PROCESSES=1), a component declared
 #                                    for another process runs in a process of its own
@@ -147,18 +149,19 @@ orientation_of() {
 # launch OH's app manager ends only the processes it started, so an app's own processes (westlake ADR-0002, ":push",
 # ":sandboxed_process0", ...) and its spawner's pre-initialized child outlived it, and they piled up: 31 of them,
 # 4.6 GB, stopped round o70w's first phone at the memory guard (2026-11-21). OH's own apps and the host are kept.
-KILL_ORPHANS='for p in /proc/[0-9]*; do pp=$(grep PPid $p/status 2>/dev/null | grep -oE "[0-9]+");
+ORPHAN_SELECT='for p in /proc/[0-9]*; do pp=$(grep PPid $p/status 2>/dev/null | grep -oE "[0-9]+");
   u=$(grep Uid $p/status 2>/dev/null | grep -oE "[0-9]+" | head -1);
   [ "$pp" = 1 ] && [ -n "$u" ] && [ "$u" -ge 20010000 ] || continue;
-  case "$(ps -o args= -p ${p##*/} | tail -n 1)" in com.ohos.*|ohos.*|com.huawei.*|org.westlake.*) continue;; esac;
-  kill -9 ${p##*/}; done; exit 0'
+  case "$(ps -o args= -p ${p##*/} | tail -n 1)" in com.ohos.*|ohos.*|com.huawei.*|org.westlake.*) continue;; esac;'
+KILL_ORPHANS="$ORPHAN_SELECT kill -9 \${p##*/}; done; exit 0"
+COUNT_ORPHANS="n=0; $ORPHAN_SELECT n=\$((n+1)); done; echo \$n"
 cleanup_board() {
   local leftover; leftover=$(cat "$RS/.installed" 2>/dev/null)
   [ -n "$leftover" ] && dev "aa force-stop $leftover >/dev/null 2>&1; bm uninstall -n $leftover >/dev/null 2>&1; exit 0" >/dev/null
   rm -f "$RS/.installed"
   dev "for p in \$(pidof appspawn-x); do kill -9 \$p; done; rm -rf /data/local/tmp/a2hlab-app-* /data/local/tmp/ev-*;
     rm -f /data/service/el1/public/westlake-registry/managed/*; exit 0" >/dev/null
-  dev "$KILL_ORPHANS" >/dev/null
+  [ "${ORPHAN_KILL:-1}" = 1 ] && dev "$KILL_ORPHANS" >/dev/null
 }
 cleanup_board
 dev "power-shell wakeup >/dev/null; power-shell timeout -o 86400000 >/dev/null; exit 0" >/dev/null
@@ -331,10 +334,12 @@ launch=$((t_launched - t_probe))s turn=$(( $(date +%s) - t_app ))s"
   # router, which serves every app) and the rest; the uninstall removes its files.
   dev "power-shell wakeup >/dev/null; uinput -T -m 540 2270 540 1400 300 >/dev/null 2>&1; exit 0" >/dev/null; sleep 2
   dev "aa force-stop $pkg >/dev/null 2>&1; for p in \$(pidof $pkg) $C $PP; do kill -9 \$p; done 2>/dev/null;
-    for p in \$(pidof appspawn-x); do case \"\$(ps -o args= -p \$p | tail -n 1)\" in *--route*) ;; *) kill -9 \$p;; esac; done;
+    sp=; for p in \$(pidof appspawn-x); do case \"\$(ps -o args= -p \$p | tail -n 1)\" in *--route*) ;; *) sp=\"\$sp \$p\";; esac; done;
+    [ -n \"\$sp\" ] && { kill \$sp; sleep 2; kill -9 \$sp; } 2>/dev/null;
     bm uninstall -n $pkg >/dev/null 2>&1; rm -rf $S /data/local/tmp/ev-$C.* /data/service/el1/public/westlake-registry/managed/$pkg;
     exit 0" >/dev/null
-  dev "$KILL_ORPHANS" >/dev/null   # its own processes and its spawner's pre-initialized child
+  if [ "${ORPHAN_KILL:-1}" = 1 ]; then dev "$KILL_ORPHANS" >/dev/null   # its own processes, its spawner's pre-initialized child
+  else say "$key: app processes left behind: $(dev "$COUNT_ORPHANS" | tr -d '[:space:]')"; fi
   rm -f "$RS/.installed"
   # The kernel log of the app's turn, and how many GPU faults it had.
   dev "dmesg" | python3 -I -c 'import re, sys
