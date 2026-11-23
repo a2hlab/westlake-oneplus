@@ -20,12 +20,14 @@ args = parser.parse_args()
 
 phone = {s['app']: s for s in json.loads(args.phone.read_text())}
 d600 = {s['app']: s for s in json.loads(args.d600.read_text())}
-unlaunched = {}
+# An app's last result line is its result: the completion and retry passes append a new line for an app whose
+# first try failed, and the scores come from that last try's logs.
+last = {}
 if args.results and args.results.exists():
     for line in args.results.read_text().splitlines():
         app, status, detail = (line.split('\t') + ['', ''])[:3]
-        if status != 'launched':
-            unlaunched[app] = status + ': ' + detail
+        last[app] = (status, detail)
+unlaunched = {app: status + ': ' + detail for app, (status, detail) in last.items() if status != 'launched'}
 
 
 def rung(s):

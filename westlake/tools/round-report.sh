@@ -14,11 +14,12 @@ L=$WL_ROUND/logs/$TAG; O=${REPORT_DIR:-$WL_ROUND/report-$TAG}; T=$WL_DIR/tools
 [ -f "$L/results.tsv" ] || die "$L/results.tsv missing"
 mkdir -p "$O"
 python3 "$T/round_score.py" "$L" --json "$O/$TAG-scores.json" > "$O/score.txt" 2>&1 || { tail -3 "$O/score.txt"; exit 1; }
-echo "== $TAG: $(wc -l < "$L/results.tsv") apps with a result"
+# Per app, its last result line (a retried app has one line per try).
+echo "== $TAG: $(cut -f1 "$L/results.tsv" | sort -u | wc -l) apps with a result"
 grep '^rungs:' "$O/score.txt"
 if [ -n "$BASE" ]; then
   python3 "$T/round_compare.py" "$O/$TAG-scores.json" "$BASE" --results "$L/results.tsv" --out "$O/compare.md" > /dev/null &&
     head -4 "$O/compare.md"
 fi
 echo "apps with GPU faults: $(grep -c 'GPU fault lines' "$WL_ROUND/round-$TAG.log" 2>/dev/null)"
-cut -f2 "$L/results.tsv" | sort | uniq -c | tr '\n' ' '; echo
+awk -F'\t' '{ s[$1] = $2 } END { for (a in s) print s[a] }' "$L/results.tsv" | sort | uniq -c | tr '\n' ' '; echo
