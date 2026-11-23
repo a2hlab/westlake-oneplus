@@ -85,6 +85,20 @@ say() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
 # A shell command on the phone. With a time limit: when the phone hangs (crash-dump mode) in the middle of a call,
 # hdc waits for it forever, and the round would never notice that the phone is gone.
 dev() { timeout -k 10 "${DEV_TIMEOUT:-300}" "$WL_HDC" -t "$HDC_TARGET" shell "$@" </dev/null | tr -d '\r'; }
+# copy_log REMOTE LOCAL: a log's text through the shell. The link can hand back nothing for a moment (two apps' logs
+# came back empty in a D600 round, and were whole a minute later), so an empty copy is taken again, and a copy with
+# text is never replaced by an empty one.
+copy_log() {
+  local try
+  for try in 1 2 3; do
+    dev "cat $1 2>/dev/null" > "$2.part"
+    [ -s "$2.part" ] && { mv -f "$2.part" "$2"; return 0; }
+    [ "$try" = 3 ] || sleep 5
+  done
+  [ -s "$2" ] || mv -f "$2.part" "$2"
+  rm -f "$2.part"
+  return 1
+}
 recv() {  # recv REMOTE LOCALNAME: into $RECV
   local to; to=$(wl_tool_path "$RECV"); case "$to" in *\\*) to="$to\\$2" ;; *) to="$to/$2" ;; esac
   rm -f "$RECV/$2"; (cd "$RECV" && timeout 60 "$WL_HDC" -t "$HDC_TARGET" file recv "$1" "$to" </dev/null >/dev/null 2>&1)
@@ -301,21 +315,31 @@ d = json.load(open(sys.argv[1])); print(d.get("child") or "-", d.get("parent") o
     dev "power-shell wakeup >/dev/null; snapshot_display -f /data/local/tmp/rg.jpeg >/dev/null; exit 0" >/dev/null
     recv /data/local/tmp/rg.jpeg rg.jpeg && cp "$RECV/rg.jpeg" "$ev.jpeg"
     dev "[ -d /proc/$C ] && kill -3 $C; exit 0" >/dev/null && sleep 3
-    dev "cat $err" > "$ev.stderr"
+    copy_log "$err" "$ev.stderr"
     if head -c 200 "$ev.stderr" | grep -q '^\[Fail\]'; then
       say "hk-$pkg: the phone stopped answering while its evidence was taken; stopping the round (it runs again on resume)"
       rm -f "$ev".*
       return 4
     fi
+    # Each of the app's other processes: its log; while it still runs under its name, its thread dump and its maps (a
+    # library loaded twice shows there); and its crash dump, matched by pid and process name and newer than the launch
+    # mark. A child's log can end on a normal line although it died: WeChat's :push logged "serving" and then took a
+    # SIGSEGV 6 s in, which only its dump showed (the round kept the main process's dump alone).
     grep -o -E '\[WL-PROC\] started [^ ]+ pid=[0-9]+' "$ev.stderr" | while read -r _ _ proc pidv; do
       p=${pidv#pid=}; d=$ev.processes; mkdir -p "$d"
+      # Names as the harness scorer reads them (lifecycle.process_deaths): the log <proc>.stderr, <proc>-<pid>.stderr
+      # when the process started again; the dump (and the maps) always <proc>-<pid>.
       f=$d/$proc.stderr; [ -e "$f" ] && f=$d/$proc-$p.stderr
-      dev "[ \"\$(ps -o args= -p $p | tail -n 1)\" = '$proc' ] && kill -3 $p; exit 0" >/dev/null && sleep 2
-      dev "cat $R/private-tmp/adapter_child_$p.stderr" > "$f"
+      dev "[ \"\$(ps -o args= -p $p | tail -n 1)\" = '$proc' ] && { kill -3 $p; cat /proc/$p/maps; }; exit 0" > "$d/$proc-$p.maps"
+      [ -s "$d/$proc-$p.maps" ] && sleep 2
+      copy_log "$R/private-tmp/adapter_child_$p.stderr" "$f"
+      dev "for x in \$(find /data/log/faultlog/temp /data/log/faultlog/faultlogger -name 'cppcrash-*' -newer /data/local/tmp/ev-launch.mark 2>/dev/null)
+        do grep -q '^Pid:$p\$' \$x && grep -q '^Process name:$proc\$' \$x && { cat \$x; break; }; done; exit 0" > "$d/$proc-$p.cppcrash"
+      for x in "$d/$proc-$p.maps" "$d/$proc-$p.cppcrash"; do [ -s "$x" ] || rm -f "$x"; done
     done
     # Its crash dump: faultloggerd writes faultlog/temp/cppcrash-<pid>-<ms> (hiview may move it); pids repeat,
     # so only a dump newer than the launch mark counts.
-    dev "ls -t /data/log/faultlog/faultlogger/ 2>/dev/null | head -3" > "$ev.faultlogs"
+    dev "find /data/log/faultlog/temp /data/log/faultlog/faultlogger -name 'cppcrash-*' -newer /data/local/tmp/ev-launch.mark 2>/dev/null; exit 0" > "$ev.faultlogs"
     local F; F=$(dev "for f in \$(find /data/log/faultlog/temp /data/log/faultlog/faultlogger -name 'cppcrash-*' -newer /data/local/tmp/ev-launch.mark 2>/dev/null)
       do grep -q '^Pid:$C\$' \$f && echo \$f; done; exit 0" | grep '^/data/' | head -1)
     [ -n "$F" ] && dev "cat $F" > "$ev.cppcrash"
