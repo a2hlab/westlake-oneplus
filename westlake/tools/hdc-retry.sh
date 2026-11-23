@@ -1,7 +1,8 @@
 #!/bin/bash
 # hdc for the Westlake probes when hdc is the Windows hdc.exe called from WSL. Long-lived WSL shells lose
 # interop sockets ("UtilAcceptVsock ... accept4 failed 110"); the Windows side never ran then, so the call is
-# repeated on a socket that answers. Notices go to a log file only: the probes parse the combined output.
+# repeated on a socket that answers; a call that could not reach the hdc server is repeated too. Notices go to a log
+# file only: the probes parse the combined output.
 # Set HDC_EXE to hdc.exe (a /mnt/... path). Keeps the working directory (hdc file send takes relative names).
 # westlake-harness device/hdc_wsl.sh picks one proven socket and runs hdc once; on this machine a socket that
 # just passed such a check still failed the next call (2026-11-18), so the call itself is checked and repeated.
@@ -28,6 +29,13 @@ for attempt in 1 2 3 4 5; do
   if printf '%s' "$out" | grep -q "UtilAcceptVsock"; then
     echo "$(date +%T) interop $s failed (attempt $attempt): switching" >> "$LOG"
     s=$(pick "$s") || { sleep 1; s=$(pick); }
+    continue
+  fi
+  # hdc.exe could not reach its own server ("[F]... connect failed status:-4039", a timeout): the command never got to
+  # the phone, so it is repeated after a pause. Twice on 2026-11-23 this lost a staging try and a whole app launch.
+  if printf '%s' "$out" | head -n 3 | grep -q "connect failed status:"; then
+    echo "$(date +%T) hdc server not reached (attempt $attempt): $(printf '%s' "$out" | head -n 1 | cut -c1-80)" >> "$LOG"
+    sleep $((attempt * 2))
     continue
   fi
   timing "$rc" "$@"; printf '%s\n' "$out"; exit $rc
