@@ -335,7 +335,8 @@ d = json.load(open(sys.argv[1])); print(d.get("child") or "-", d.get("parent") o
       copy_log "$R/private-tmp/adapter_child_$p.stderr" "$f"
       dev "for x in \$(find /data/log/faultlog/temp /data/log/faultlog/faultlogger -name 'cppcrash-*' -newer /data/local/tmp/ev-launch.mark 2>/dev/null)
         do grep -q '^Pid:$p\$' \$x && grep -q '^Process name:$proc\$' \$x && { cat \$x; break; }; done; exit 0" > "$d/$proc-$p.cppcrash"
-      for x in "$d/$proc-$p.maps" "$d/$proc-$p.cppcrash"; do [ -s "$x" ] || rm -f "$x"; done
+      # hdc answers an empty command with a lone newline: a file with nothing but white space is empty.
+      for x in "$d/$proc-$p.maps" "$d/$proc-$p.cppcrash"; do grep -q '[^[:space:]]' "$x" 2>/dev/null || rm -f "$x"; done
     done
     # Its crash dump: faultloggerd writes faultlog/temp/cppcrash-<pid>-<ms> (hiview may move it); pids repeat,
     # so only a dump newer than the launch mark counts.
