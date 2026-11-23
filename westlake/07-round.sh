@@ -10,6 +10,8 @@
 #                                    it drawing and two screenshots in a row read as the app (or at once if it died)
 #   SECURE_LAYER (0)                 1: FLAG_SECURE windows become OH security layers, which screenshots draw black
 #   ROUND_EXTRA                      more launcher arguments for every app
+#   WL_HELPERS_SRC                   the native/ directory the launcher's namespace helpers come from
+#                                    (default: $WL_SC/workspace/westlake/native)
 #   NET_CHECK (8.8.8.8)              an address the phone must reach before each app (empty: no check)
 #   LOCALE (en-US)                   the locale apps get, as on Westlake's test board, whose language is English;
 #                                    empty: the phone's own (the image's default is Chinese)
@@ -123,7 +125,9 @@ LOCALE=${LOCALE-en-US}; la=(); [ -n "$LOCALE" ] && la=(--runtime-env "WESTLAKE_L
 # (WESTLAKE_SPAWN_REQUEST), under the managed launch as under the direct one.
 [ "${APP_PROCESSES:-1}" = 1 ] && la+=(--runtime-env WESTLAKE_APP_PROCESSES=1)
 helpers=$LAUNCH/helpers; mkdir -p "$helpers/native"
-cp "$WL_SC/workspace/westlake/native/"{source_app_namespace.c,host_spawn.c} "$WL_WESTLAKE/native/touchfwd.c" "$helpers/native/"
+# The launcher's namespace helpers: WL_HELPERS_SRC names another westlake checkout's native/ (its source_app_namespace.c
+# must match what the launcher asks of it, e.g. --android-install-path needs install_dir, westlake 43889f7/c483098).
+cp "${WL_HELPERS_SRC:-$WL_SC/workspace/westlake/native}/"{source_app_namespace.c,host_spawn.c} "$WL_WESTLAKE/native/touchfwd.c" "$helpers/native/"
 
 # The apps of this round, in rank order: not marked missing, not already done.
 todo=()
