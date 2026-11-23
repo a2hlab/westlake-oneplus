@@ -128,6 +128,8 @@ helpers=$LAUNCH/helpers; mkdir -p "$helpers/native"
 # The launcher's namespace helpers: WL_HELPERS_SRC names another westlake checkout's native/ (its source_app_namespace.c
 # must match what the launcher asks of it, e.g. --android-install-path needs install_dir, westlake 43889f7/c483098).
 cp "${WL_HELPERS_SRC:-$WL_SC/workspace/westlake/native}/"{source_app_namespace.c,host_spawn.c} "$WL_WESTLAKE/native/touchfwd.c" "$helpers/native/"
+hsrc=${WL_HELPERS_SRC:-$WL_SC/workspace/westlake/native}
+say "namespace helpers: $hsrc ($(git -C "$hsrc" rev-parse --short HEAD 2>/dev/null || echo no git), source_app_namespace.c $(sha256sum "$hsrc/source_app_namespace.c" | cut -c1-8))"
 
 # The apps of this round, in rank order: not marked missing, not already done.
 todo=()
